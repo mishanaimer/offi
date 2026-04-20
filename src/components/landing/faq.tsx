@@ -1,34 +1,31 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Reveal } from "./reveal";
 
 const ITEMS = [
-  { q: "Это безопасно? Мои документы не утекут?",
-    a: "Данные хранятся в Supabase с Row Level Security — другие компании физически не видят ваши файлы. LLM-запросы идут через RouterAI и не используются для обучения моделей." },
-  { q: "Какие файлы можно загружать?",
-    a: "PDF, DOCX, XLSX, CSV, TXT и любые URL. Мы автоматически парсим текст, разбиваем на чанки и создаём векторные embeddings." },
-  { q: "Нужен ли VPN для работы?",
-    a: "Нет. Мы используем RouterAI.ru — российский шлюз к DeepSeek и Claude. Оплата рублями, без VPN." },
-  { q: "Кто такой Оффи? Можно переименовать?",
-    a: "Оффи — дефолтное имя ассистента. В настройках вы можете задать своё: ДентОпт → Денти, АйСистемс → Айли." },
-  { q: "Интегрируется ли с AmoCRM / Bitrix24 / 1С?",
-    a: "Да. На тарифе «Бизнес» — AmoCRM и Bitrix24, на «Команде» — дополнительно 1С (OData) и публичный API." },
-  { q: "Как считается один запрос?",
-    a: "Один запрос = одно сообщение пользователя. Действия (отправка письма, создание встречи) считаются отдельно — есть свой лимит." },
+  { q: "Безопасно ли загружать документы?", a: "Да. Все данные хранятся на серверах в РФ с шифрованием. Мы не используем ваши данные для обучения моделей. Соответствуем 152-ФЗ." },
+  { q: "Сколько времени занимает настройка?", a: "Базовая настройка — 5 минут. Загрузите документы, подключите почту и календарь — Offi готов к работе." },
+  { q: "Можно ли подключить свою CRM?", a: "Да, поддерживаем интеграции с Битрикс24, amoCRM, а также API для любой системы." },
+  { q: "Что если AI ошибётся?", a: "Offi всегда спрашивает подтверждение перед отправкой. Вы контролируете каждое действие." },
 ];
 
 export function LandingFaq() {
   return (
-    <section id="faq" className="py-20 md:py-28 border-t border-border">
-      <div className="container-page max-w-3xl">
-        <div className="text-sm text-primary font-medium">Частые вопросы</div>
-        <h2 className="mt-2 text-3xl md:text-4xl font-semibold tracking-tight">Что спрашивают чаще всего</h2>
-        <div className="mt-10 space-y-3">
-          {ITEMS.map((item, i) => <FaqItem key={i} {...item} />)}
+    <section id="faq" className="max-w-[580px] mx-auto px-6 md:px-8 pt-[88px]">
+      <Reveal>
+        <div className="text-center mb-10">
+          <p className="text-[13px] font-semibold text-primary mb-2">FAQ</p>
+          <h2 className="text-[28px] font-extrabold text-foreground tracking-[-0.03em]">
+            Частые вопросы
+          </h2>
         </div>
-      </div>
+      </Reveal>
+      {ITEMS.map((item, i) => (
+        <Reveal key={i} delay={i * 60}>
+          <FaqItem {...item} />
+        </Reveal>
+      ))}
     </section>
   );
 }
@@ -36,18 +33,26 @@ export function LandingFaq() {
 function FaqItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={cn("card-surface overflow-hidden transition", open && "shadow-[var(--shadow-sm)]")}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-5 py-4 text-left"
+    <div
+      onClick={() => setOpen((v) => !v)}
+      className="cursor-pointer border-b border-[hsl(var(--border-light))]"
+    >
+      <div className="py-[18px] flex justify-between items-center">
+        <span className="text-sm font-semibold text-foreground">{q}</span>
+        <span
+          className="text-lg text-[hsl(var(--text-tertiary))] font-light shrink-0 ml-4 inline-block transition-transform duration-300"
+          style={{ transform: open ? "rotate(45deg)" : "rotate(0)", transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)" }}
+        >+</span>
+      </div>
+      <div
+        className="overflow-hidden transition-all duration-[400ms]"
+        style={{
+          maxHeight: open ? 200 : 0,
+          opacity: open ? 1 : 0,
+          transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
+        }}
       >
-        <span className="font-medium pr-4">{q}</span>
-        <ChevronDown className={cn("w-4 h-4 text-muted-foreground shrink-0 transition", open && "rotate-180")} />
-      </button>
-      <div className={cn("grid transition-all duration-300 ease-out", open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
-        <div className="overflow-hidden">
-          <p className="px-5 pb-5 text-sm text-muted-foreground leading-relaxed">{a}</p>
-        </div>
+        <p className="text-[13px] text-muted-foreground leading-[1.65] pb-[18px]">{a}</p>
       </div>
     </div>
   );

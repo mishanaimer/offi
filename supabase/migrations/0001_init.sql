@@ -219,12 +219,12 @@ create policy companies_update on public.companies for update
 drop policy if exists companies_insert on public.companies;
 create policy companies_insert on public.companies for insert with check (true);
 
--- generic company-isolation policy для всех остальных таблиц
+-- generic company-isolation policy для всех таблиц с прямой колонкой company_id
 do $$
 declare t text;
 begin
   foreach t in array array[
-    'documents','chunks','clients','channels','messages',
+    'documents','chunks','clients','channels',
     'templates','generated_docs','integrations','action_log'
   ] loop
     execute format('drop policy if exists %I_rw on public.%I', t, t);
@@ -235,7 +235,12 @@ begin
   end loop;
 end $$;
 
--- channel_members — через связку с channel.company_id
+-- messages и channel_members — через связку с channel.company_id
+drop policy if exists messages_rw on public.messages;
+create policy messages_rw on public.messages for all
+  using (exists(select 1 from public.channels c where c.id = channel_id and c.company_id = public.current_company_id()))
+  with check (exists(select 1 from public.channels c where c.id = channel_id and c.company_id = public.current_company_id()));
+
 drop policy if exists channel_members_rw on public.channel_members;
 create policy channel_members_rw on public.channel_members for all
   using (exists(select 1 from public.channels c where c.id = channel_id and c.company_id = public.current_company_id()))

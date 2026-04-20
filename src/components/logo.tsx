@@ -1,16 +1,31 @@
 import { cn } from "@/lib/utils";
 
-export function Logo({ className, size = 24 }: { className?: string; size?: number }) {
+/**
+ * Offi wordmark — "offi.ai" с акцентом на ".ai".
+ * Вариант `mark` — круглая иконка с буквой O (для аватарок, favicon'а, онбординга).
+ */
+export function Logo({ className, size = 19, showMark = false }: { className?: string; size?: number; showMark?: boolean }) {
   return (
-    <div className={cn("inline-flex items-center gap-2", className)}>
-      <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-        <rect width="32" height="32" rx="9" fill="hsl(var(--accent-brand))" />
-        <path
-          d="M11.2 10.4C9 10.4 7.4 12 7.4 14.3v3.4C7.4 20 9 21.6 11.2 21.6h3.4c2.3 0 3.9-1.6 3.9-3.9v-3.4c0-2.3-1.6-3.9-3.9-3.9h-3.4ZM21 10.4v11.2h3.6V10.4H21Z"
-          fill="white"
-        />
-      </svg>
-      <span className="text-[17px] font-semibold tracking-tight">Offi</span>
-    </div>
+    <span className={cn("inline-flex items-center gap-2 font-extrabold tracking-[-0.04em]", className)} style={{ fontSize: size }}>
+      {showMark && <OffiMark size={Math.round(size * 1.4)} />}
+      <span>
+        offi<span className="text-primary">.ai</span>
+      </span>
+    </span>
+  );
+}
+
+export function OffiMark({ size = 34, className }: { size?: number; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center justify-center rounded-full bg-primary text-white font-extrabold transition-transform duration-300 ease-out hover:scale-105",
+        className
+      )}
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.42) }}
+      aria-hidden
+    >
+      O
+    </span>
   );
 }

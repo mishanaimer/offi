@@ -1,16 +1,22 @@
 import type { Metadata, Viewport } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { Onest } from "next/font/google";
 import "./globals.css";
 
+const onest = Onest({
+  subsets: ["latin", "cyrillic"],
+  weight: ["300", "400", "500", "600", "700", "800"],
+  display: "swap",
+  variable: "--font-onest",
+});
+
 export const metadata: Metadata = {
-  title: "Offi — AI-агент для бизнеса",
+  title: "Offi.ai — AI, который знает ваш бизнес",
   description:
-    "Загрузи документы и клиентов. Общайся как с ChatGPT, но ассистент знает твой бизнес и умеет действовать: отправлять письма, назначать встречи, генерировать договоры.",
+    "Загрузите документы — получите ассистента. Письма, договоры, встречи — в одном чате. Бета-доступ открыт.",
   icons: { icon: "/favicon.svg" },
   openGraph: {
-    title: "Offi — AI-агент для бизнеса",
-    description: "Ассистент, который знает твой бизнес и умеет действовать.",
+    title: "Offi.ai — AI-ассистент для бизнеса",
+    description: "Один ассистент — вместо десятка сервисов.",
     url: "https://offi.ai",
     siteName: "Offi",
     locale: "ru_RU",
@@ -25,15 +31,15 @@ export const viewport: Viewport = {
   userScalable: false,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0b0f14" },
+    { media: "(prefers-color-scheme: light)", color: "#F8FAFE" },
+    { media: "(prefers-color-scheme: dark)", color: "#0B0F14" },
   ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ru" className={`${GeistSans.variable} ${GeistMono.variable}`}>
-      <body>{children}</body>
+    <html lang="ru" className={onest.variable}>
+      <body className={onest.className}>{children}</body>
     </html>
   );
 }

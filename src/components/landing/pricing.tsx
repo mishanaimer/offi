@@ -1,40 +1,40 @@
 import Link from "next/link";
-import { Check } from "lucide-react";
+import { Reveal } from "./reveal";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const PLANS = [
   {
-    name: "Пробный",
-    price: "0 ₽",
-    period: "14 дней",
-    features: ["50 запросов", "1 сотрудник", "10 документов", "5 действий"],
-    cta: "Начать",
-    href: "/register",
-  },
-  {
+    id: "start",
     name: "Старт",
-    price: "2 490 ₽",
-    period: "в месяц",
-    features: ["500 запросов", "3 сотрудника", "50 документов", "50 действий", "Email + Telegram"],
-    cta: "Попробовать",
+    price: "0",
+    period: "навсегда",
+    emoji: "🌱",
+    desc: "Для знакомства с Offi",
+    features: ["1 пользователь", "50 запросов/день", "5 документов", "Базовые интеграции"],
+    cta: "Начать бесплатно",
     href: "/register",
   },
   {
-    name: "Бизнес",
-    price: "5 990 ₽",
-    period: "в месяц",
-    badge: "Популярный",
-    features: ["3 000 запросов", "10 сотрудников", "300 документов", "500 действий", "CRM-интеграции"],
-    cta: "Попробовать",
+    id: "pro",
+    name: "Pro",
+    price: "2 990",
+    period: "₽/мес",
+    emoji: "⚡",
+    popular: true,
+    desc: "Для растущего бизнеса",
+    features: ["До 10 пользователей", "Безлимитные запросы", "Безлимитные документы", "Все интеграции", "Приоритетная поддержка", "API доступ"],
+    cta: "Попробовать 14 дней",
     href: "/register",
-    highlight: true,
   },
   {
+    id: "team",
     name: "Команда",
-    price: "11 990 ₽",
-    period: "в месяц",
-    features: ["15 000 запросов", "30 сотрудников", "∞ документов", "3 000 действий", "1С + API"],
+    price: "7 990",
+    period: "₽/мес",
+    emoji: "🏢",
+    desc: "Для компаний от 10 человек",
+    features: ["До 50 пользователей", "Всё из Pro", "Выделенный сервер", "SLA 99.9%", "Персональный менеджер", "Кастомные интеграции"],
     cta: "Связаться",
     href: "mailto:hello@offi.ai",
   },
@@ -42,53 +42,73 @@ const PLANS = [
 
 export function LandingPricing() {
   return (
-    <section id="pricing" className="py-20 md:py-28 border-t border-border bg-muted/30">
-      <div className="container-page">
-        <div className="max-w-2xl">
-          <div className="text-sm text-primary font-medium">Тарифы</div>
-          <h2 className="mt-2 text-3xl md:text-4xl font-semibold tracking-tight">
-            Честные цены. Без скрытых комиссий.
+    <section id="pricing" className="max-w-[800px] mx-auto px-6 md:px-8 pt-[88px]">
+      <Reveal>
+        <div className="text-center mb-12">
+          <p className="text-[13px] font-semibold text-primary mb-2">Тарифы</p>
+          <h2 className="text-[30px] md:text-[32px] font-extrabold text-foreground tracking-[-0.035em]">
+            Простые и честные цены
           </h2>
-          <p className="mt-4 text-muted-foreground">
-            Маржа на AI — 55–83% даже на самом активном тарифе. Можно докупить 1000 запросов за 990 ₽.
-          </p>
+          <p className="text-sm text-muted-foreground mt-2">Начните бесплатно, масштабируйтесь когда готовы</p>
         </div>
-
-        <div className="mt-12 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {PLANS.map((p) => (
+      </Reveal>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+        {PLANS.map((p, i) => (
+          <Reveal key={p.id} delay={i * 100}>
             <div
-              key={p.name}
               className={cn(
-                "card-surface p-6 flex flex-col",
-                p.highlight && "ring-1 ring-primary shadow-[var(--shadow-md)]"
+                "relative rounded-[18px] p-7 border card-hover h-full",
+                p.popular ? "bg-primary border-primary" : "bg-card border-border hover:border-[hsl(var(--accent-brand-mid))]"
               )}
             >
-              {p.badge && (
-                <span className="self-start rounded-full bg-primary/10 text-primary px-2.5 py-0.5 text-xs font-medium mb-2">
-                  {p.badge}
-                </span>
+              {p.popular && (
+                <div
+                  className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3.5 py-1 rounded-full bg-white text-primary text-[11px] font-bold"
+                  style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
+                >
+                  Популярный
+                </div>
               )}
-              <h3 className="font-semibold">{p.name}</h3>
-              <div className="mt-3 flex items-baseline gap-1.5">
-                <span className="text-3xl font-semibold tracking-tight">{p.price}</span>
-                <span className="text-sm text-muted-foreground">/{p.period}</span>
+              <div className="text-[28px] mb-2">{p.emoji}</div>
+              <div className={cn("text-base font-bold tracking-[-0.01em] mb-1", p.popular ? "text-white" : "text-foreground")}>
+                {p.name}
               </div>
-              <ul className="mt-5 space-y-2 text-sm flex-1">
+              <div className={cn("text-xs mb-4", p.popular ? "text-white/70" : "text-[hsl(var(--text-tertiary))]")}>
+                {p.desc}
+              </div>
+              <div className="flex items-baseline gap-1 mb-5">
+                <span className={cn("text-[32px] font-extrabold tracking-[-0.03em]", p.popular ? "text-white" : "text-foreground")}>
+                  {p.price}
+                </span>
+                <span className={cn("text-[13px]", p.popular ? "text-white/60" : "text-[hsl(var(--text-tertiary))]")}>
+                  {p.period}
+                </span>
+              </div>
+              <div className="flex flex-col gap-2.5 mb-6">
                 {p.features.map((f) => (
-                  <li key={f} className="flex gap-2 text-foreground/90">
-                    <Check className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div key={f} className={cn("flex items-center gap-2 text-[13px]", p.popular ? "text-white/90" : "text-foreground")}>
+                    <span
+                      className={cn(
+                        "w-[18px] h-[18px] rounded-full grid place-items-center text-[10px] font-bold shrink-0",
+                        p.popular ? "bg-white/15 text-white" : "bg-[hsl(var(--accent-brand-light))] text-primary"
+                      )}
+                    >✓</span>
                     {f}
-                  </li>
+                  </div>
                 ))}
-              </ul>
-              <Link href={p.href} className="mt-6">
-                <Button className="w-full" variant={p.highlight ? "default" : "outline"}>
-                  {p.cta}
-                </Button>
+              </div>
+              <Link href={p.href} className="block">
+                {p.popular ? (
+                  <button className="btn-bounce w-full py-[11px] rounded-[10px] bg-white text-primary font-semibold text-sm">
+                    {p.cta}
+                  </button>
+                ) : (
+                  <Button variant="secondary" className="w-full">{p.cta}</Button>
+                )}
               </Link>
             </div>
-          ))}
-        </div>
+          </Reveal>
+        ))}
       </div>
     </section>
   );

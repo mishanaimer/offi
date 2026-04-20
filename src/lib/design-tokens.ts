@@ -1,41 +1,75 @@
 /**
- * Дизайн-система Offi — источник правды для токенов.
- * Значения дублируются в globals.css как CSS-переменные.
- * Когда появится финальная дизайн-система от Claude Design — обнови оба файла.
+ * Offi Design System v2 — source of truth.
+ * Синхронизировано с src/app/globals.css (CSS-переменные HSL).
+ * Источник: Claude Design handoff, Offi Prototype v2.html.
  */
 export const designTokens = {
   brand: {
     name: "Offi",
-    accent: "#1a6eff",
-    accentHover: "#0057e0",
+    accent: "#0259DD",
+    accentHover: "#0142A8",
+    accentMid: "#84AFFB",
+    accentLight: "#EBF2FF",
+  },
+  colors: {
+    bg: "#F8FAFE",
+    surface: "#FFFFFF",
+    surfaceAlt: "#F0F4FA",
+    text: "#0A0A0A",
+    textSecondary: "#4B5563",
+    textTertiary: "#9CA3AF",
+    border: "#D6E4F5",
+    borderLight: "#EBF2FF",
+    success: "#059669",
+    successLight: "#ECFDF5",
+    warning: "#D97706",
+    warningLight: "#FFFBEB",
   },
   typography: {
-    family: { sans: "Geist", mono: "Geist Mono" },
+    family: { sans: "Onest", mono: "ui-monospace" },
+    weights: [300, 400, 500, 600, 700, 800],
     scale: {
       xs: "0.75rem",
-      sm: "0.875rem",
-      base: "1rem",
-      lg: "1.125rem",
-      xl: "1.25rem",
-      "2xl": "1.5rem",
-      "3xl": "2rem",
-      "4xl": "2.5rem",
-      "5xl": "3rem",
+      sm: "0.8125rem",
+      base: "0.875rem",
+      lg: "1rem",
+      xl: "1.125rem",
+      "2xl": "1.25rem",
+      "3xl": "1.625rem",
+      "4xl": "2rem",
+      "5xl": "2.5rem",
+      "6xl": "3.25rem",
+    },
+    letterSpacing: {
+      tight: "-0.04em",
+      tighter: "-0.03em",
+      normal: "-0.01em",
     },
   },
   spacing: { 1: 4, 2: 8, 3: 12, 4: 16, 6: 24, 8: 32, 12: 48, 16: 64 },
-  radius: { sm: 6, md: 10, lg: 14, xl: 20, full: 9999 },
+  radius: { sm: 8, md: 10, lg: 14, xl: 18, full: 9999 },
   shadow: {
-    xs: "0 1px 2px 0 rgb(16 24 40 / 0.04)",
-    sm: "0 1px 3px 0 rgb(16 24 40 / 0.06), 0 1px 2px -1px rgb(16 24 40 / 0.04)",
-    md: "0 4px 12px -2px rgb(16 24 40 / 0.08)",
-    lg: "0 12px 32px -8px rgb(16 24 40 / 0.12)",
+    xs: "0 1px 2px rgba(0,0,0,0.04)",
+    card: "0 1px 2px rgba(0,0,0,0.02), 0 16px 48px rgba(2,89,221,0.04)",
+    cardHover: "0 8px 30px rgba(2,89,221,0.06)",
+    buttonPrimary: "0 2px 8px rgba(2,89,221,0.15)",
+    buttonPrimaryHover: "0 4px 16px rgba(2,89,221,0.25)",
   },
-  /** Характер продукта: Apple-минимализм, деловой, светлые тона. */
+  easing: {
+    default: "cubic-bezier(0.22, 1, 0.36, 1)",
+    back: "cubic-bezier(0.34, 1.3, 0.64, 1)",
+  },
+  /** Характер продукта */
   personality: {
     tone: "calm, confident, helpful",
-    visualLanguage: ["mostly light", "soft shadows", "14px radii", "generous spacing", "subtle motion"],
-    doNots: ["heavy gradients", "hard shadows", "neon colors", "overlapping badges"],
+    visualLanguage: [
+      "blue-tinted light",
+      "soft long shadows",
+      "14–18px radii",
+      "generous spacing",
+      "smooth Apple-easing motion",
+    ],
+    doNots: ["heavy gradients", "hard shadows", "neon colors", "over-rounded pills"],
   },
 } as const;
 

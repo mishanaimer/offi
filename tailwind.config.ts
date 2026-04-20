@@ -24,8 +24,8 @@ const config: Config = {
         sm: "calc(var(--radius) - 8px)",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
-        mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: ["var(--font-onest)", "Onest", "ui-sans-serif", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       keyframes: {
         "fade-in": { from: { opacity: "0", transform: "translateY(4px)" }, to: { opacity: "1", transform: "translateY(0)" } },
