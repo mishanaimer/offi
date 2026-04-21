@@ -69,7 +69,20 @@ export function ChatView({
           history: messages.slice(-8).map((m) => ({ role: m.role, content: m.content })),
         }),
       });
-      if (!res.ok || !res.body) throw new Error("chat failed");
+      if (!res.ok) {
+        const ct = res.headers.get("content-type") ?? "";
+        let detail = `HTTP ${res.status}`;
+        try {
+          if (ct.includes("application/json")) {
+            const j = await res.json();
+            detail = [j.detail, j.hint].filter(Boolean).join(" — ") || detail;
+          } else {
+            detail = (await res.text()).slice(0, 300) || detail;
+          }
+        } catch {}
+        throw new Error(detail);
+      }
+      if (!res.body) throw new Error("stream is empty");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -102,8 +115,9 @@ export function ChatView({
       }
       setMessages((m) => m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false } : msg)));
     } catch (e) {
+      const detail = (e as Error).message || "unknown";
       setMessages((m) =>
-        m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false, content: "Не удалось получить ответ. Проверьте ROUTERAI_API_KEY." } : msg))
+        m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false, content: `❗ Ошибка: ${detail}` } : msg))
       );
     } finally {
       setSending(false);

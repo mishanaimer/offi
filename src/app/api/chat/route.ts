@@ -86,7 +86,17 @@ export async function POST(req: NextRequest) {
   }
 
   // --- streaming ответ ---
-  const upstream = await chatCompletionStream(messages, { model: MODELS.main });
+  let upstream: ReadableStream<Uint8Array>;
+  try {
+    upstream = await chatCompletionStream(messages, { model: MODELS.main });
+  } catch (e) {
+    const msg = (e as Error).message ?? "unknown";
+    console.error("RouterAI stream error:", msg);
+    return Response.json(
+      { error: "routerai_failed", detail: msg, hint: "Проверь ROUTERAI_API_KEY, ROUTERAI_BASE_URL и ROUTERAI_MAIN_MODEL. Перезапусти dev-сервер после правки .env.local." },
+      { status: 502 }
+    );
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
