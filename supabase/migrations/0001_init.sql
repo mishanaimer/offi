@@ -201,6 +201,19 @@ language sql stable security definer set search_path = public as $$
   select company_id from public.users where id = auth.uid();
 $$;
 
+-- Дефолт company_id = current_company_id() — чтобы клиент мог не указывать его в INSERT.
+-- Обязательно ПОСЛЕ создания функции current_company_id().
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'documents','chunks','clients','channels',
+    'templates','generated_docs','integrations','action_log'
+  ] loop
+    execute format('alter table public.%I alter column company_id set default public.current_company_id()', t);
+  end loop;
+end $$;
+
 -- USERS: видят только себя и коллег из той же компании
 drop policy if exists users_select on public.users;
 create policy users_select on public.users for select

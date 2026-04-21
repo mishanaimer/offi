@@ -27,36 +27,26 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
   async function finish() {
     setErr(null);
     try {
-      const supabase = createClient();
+      // 1) атомарно: создать компанию + связать пользователя + создать канал (на сервере)
+      const res = await fetch("/api/onboarding/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName,
+          assistantName: assistantName || suggestedName,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { companyId } = (await res.json()) as { companyId: string };
 
-      // 1) создаём компанию
-      const { data: company, error: companyErr } = await supabase
-        .from("companies")
-        .insert({ name: companyName, assistant_name: assistantName || suggestedName })
-        .select()
-        .single();
-      if (companyErr) throw companyErr;
-
-      // 2) привязываем пользователя
-      const { error: linkErr } = await supabase
-        .from("users")
-        .update({ company_id: company.id })
-        .eq("id", userId);
-      if (linkErr) throw linkErr;
-
-      // 3) стартовый канал
-      await supabase
-        .from("channels")
-        .insert({ company_id: company.id, name: "Основной чат", type: "ai", created_by: userId });
-
-      // 4) импорт начальной базы знаний (если указали)
+      // 2) импорт начальной базы знаний (если указали)
       if (knowledgeMode !== "skip" && knowledgeValue.trim()) {
         await fetch("/api/ingest", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            companyId: company.id,
-            source: knowledgeMode,         // "url" | "text"
+            companyId,
+            source: knowledgeMode,
             value: knowledgeValue,
           }),
         });
