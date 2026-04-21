@@ -6,10 +6,11 @@
 const BASE_URL = process.env.ROUTERAI_BASE_URL ?? "https://routerai.ru/api/v1";
 const API_KEY = process.env.ROUTERAI_API_KEY ?? "";
 
+// RouterAI использует формат "provider/model" — см. https://routerai.ru/models
 export const MODELS = {
-  router: process.env.ROUTERAI_ROUTER_MODEL ?? "deepseek-v3.2",
-  main: process.env.ROUTERAI_MAIN_MODEL ?? "claude-sonnet-4-6",
-  embedding: process.env.ROUTERAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
+  router: process.env.ROUTERAI_ROUTER_MODEL ?? "deepseek/deepseek-v3.2",
+  main: process.env.ROUTERAI_MAIN_MODEL ?? "anthropic/claude-sonnet-4.6",
+  embedding: process.env.ROUTERAI_EMBEDDING_MODEL ?? "google/gemini-embedding-2-preview",
 } as const;
 
 export type ChatMessage = {
