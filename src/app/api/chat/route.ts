@@ -5,15 +5,36 @@ import { embed } from "@/lib/embeddings";
 import { truncate } from "@/lib/utils";
 import { scheduleFactExtraction } from "@/lib/memory";
 import { currentPeriod, getPlan } from "@/lib/plans";
+import { ACTION_TOOLS } from "@/lib/tools";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SYSTEM_PROMPT = (assistantName: string, companyName: string) =>
-  `Ты — ${assistantName}, AI-ассистент компании «${companyName}».
-Отвечай точно, кратко, по-русски. Когда опираешься на контекст из базы знаний или памяти — упоминай это естественно.
-Если контекста не хватает — честно скажи «в документах этого нет, могу поискать общий ответ».
-Не выдумывай цифр и фактов.`;
+const SYSTEM_PROMPT = (assistantName: string, companyName: string, withTools: boolean) =>
+  `Ты — ${assistantName}, встроенный AI-агент внутри корпоративной платформы Offi для компании «${companyName}».
+Это НЕ чат на публичном сайте — ты работаешь изнутри CRM/базы знаний компании и у тебя ЕСТЬ доступ к:
+— базе клиентов (clients) этой компании
+— шаблонам документов и генерации договоров
+— корпоративной памяти (факты, договорённости, правила)
+— отправке email (Postmark) и Telegram от имени сотрудника
+— календарю и встречам
+— файлам, которые пользователь прикрепил к сообщению (они автоматически попадают в базу знаний)
+
+НИКОГДА не говори «у меня нет доступа к CRM/клиентам/базе» — доступ есть, нужно лишь вызвать соответствующий инструмент или запросить недостающие параметры. Если для действия не хватает данных — задай короткий уточняющий вопрос, не отказывай.
+
+Отвечай точно, кратко, по-русски. Когда опираешься на контекст из базы знаний или памяти — упоминай это естественно. Если в документах конкретного факта нет — так и скажи и предложи добавить.
+Не выдумывай цифр и фактов.${
+    withTools
+      ? `\n\nДоступные инструменты (вызывай их, когда пользователь просит действие):
+- send_email / send_telegram — написать сообщение (требует подтверждения пользователя)
+- create_meeting / add_to_calendar — запланировать встречу
+- find_client — найти клиента в CRM
+- generate_document — сгенерировать документ из шаблона
+- remember_fact — сохранить факт в память компании
+
+Когда пользователь явно просит что-то сделать (отправь, создай, найди, запомни, посмотри список) — вызывай инструмент. Если данных не хватает (нет email, не ясен клиент) — сначала коротко уточни.`
+      : ""
+  }`;
 
 type ReqBody = {
   channelId: string | null;
@@ -115,7 +136,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const systemPrompt = SYSTEM_PROMPT(company.assistant_name, company.name);
+  // Передаём tools всем типам, кроме чистого smalltalk — классификатор часто
+  // недооценивает «найди клиента» / «пришли письмо» и относит их к question.
+  const withTools = type !== "smalltalk";
+  const systemPrompt = SYSTEM_PROMPT(company.assistant_name, company.name, withTools);
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -160,7 +184,10 @@ export async function POST(req: NextRequest) {
   // --- streaming ответа ---
   let upstream: ReadableStream<Uint8Array>;
   try {
-    upstream = await chatCompletionStream(messages, { model: MODELS.main });
+    upstream = await chatCompletionStream(messages, {
+      model: MODELS.main,
+      ...(withTools ? { tools: ACTION_TOOLS, tool_choice: "auto" } : {}),
+    });
   } catch (e) {
     const msg = (e as Error).message ?? "unknown";
     console.error("RouterAI stream error:", msg);
@@ -189,6 +216,58 @@ export async function POST(req: NextRequest) {
       const decoder = new TextDecoder();
       let buffer = "";
       let full = "";
+      const toolCalls: Record<number, { id: string; name: string; arguments: string }> = {};
+
+      // --- Прогрессивное сохранение AI-сообщения ---
+      // Чтобы ответ не терялся при обрыве стрима (переход между вкладками),
+      // вставляем строку при первой дельте и обновляем раз в ~700мс.
+      let aiRowId: string | null = null;
+      let lastSaveAt = 0;
+      let savingPromise: Promise<any> | null = null;
+
+      const persistAi = async (final: boolean) => {
+        if (!channelId) return;
+        const now = Date.now();
+        if (!final && now - lastSaveAt < 700) return;
+        if (!full && !final) return;
+        if (savingPromise && !final) return; // пропустить, если ещё пишется предыдущее
+        lastSaveAt = now;
+
+        const task = (async () => {
+          try {
+            if (!aiRowId) {
+              const { data } = await service
+                .from("messages")
+                .insert({
+                  channel_id: channelId,
+                  user_id: null,
+                  content: full,
+                  is_ai: true,
+                  sources: sources.length ? sources : null,
+                })
+                .select("id")
+                .single();
+              aiRowId = data?.id ?? null;
+            } else {
+              await service
+                .from("messages")
+                .update({
+                  content: full,
+                  sources: sources.length ? sources : null,
+                })
+                .eq("id", aiRowId);
+            }
+          } catch (e) {
+            console.error("persistAi failed:", (e as Error).message);
+          }
+        })();
+        savingPromise = task;
+        try {
+          await task;
+        } finally {
+          if (savingPromise === task) savingPromise = null;
+        }
+      };
 
       try {
         while (true) {
@@ -206,9 +285,26 @@ export async function POST(req: NextRequest) {
               const delta = json.choices?.[0]?.delta?.content ?? "";
               if (delta) {
                 full += delta;
-                controller.enqueue(
-                  encoder.encode(`data: ${JSON.stringify({ type: "delta", text: delta })}\n\n`)
-                );
+                try {
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify({ type: "delta", text: delta })}\n\n`)
+                  );
+                } catch {
+                  // клиент отвалился — продолжаем копить, чтобы сохранить в БД
+                }
+                // фоновая запись (не блокируем стрим)
+                void persistAi(false);
+              }
+              // Агрегируем tool_calls: OpenAI-совместимый формат, arguments идут чанками.
+              const tc = json.choices?.[0]?.delta?.tool_calls;
+              if (Array.isArray(tc)) {
+                for (const c of tc) {
+                  const idx: number = c.index ?? 0;
+                  if (!toolCalls[idx]) toolCalls[idx] = { id: "", name: "", arguments: "" };
+                  if (c.id) toolCalls[idx].id = c.id;
+                  if (c.function?.name) toolCalls[idx].name = c.function.name;
+                  if (c.function?.arguments) toolCalls[idx].arguments += c.function.arguments;
+                }
               }
             } catch {}
           }
@@ -216,17 +312,57 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         console.error("stream error", e);
       } finally {
-        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-        controller.close();
-
-        if (channelId && full) {
-          await service.from("messages").insert({
-            channel_id: channelId,
-            user_id: null,
-            content: full,
-            is_ai: true,
-            sources: sources.length ? sources : null,
+        const calls = Object.values(toolCalls)
+          .filter((c) => c.name)
+          .map((c) => {
+            let args: Record<string, unknown> = {};
+            try {
+              args = c.arguments ? JSON.parse(c.arguments) : {};
+            } catch {}
+            return { id: c.id || crypto.randomUUID(), name: c.name, arguments: args };
           });
+
+        if (calls.length) {
+          try {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: "tool_calls", calls })}\n\n`)
+            );
+          } catch {}
+        }
+
+        try {
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          controller.close();
+        } catch {}
+
+        // Дождаться незавершившейся записи и сделать финальный upsert с полным текстом.
+        if (savingPromise) {
+          try { await savingPromise; } catch {}
+        }
+        if (channelId && (full || calls.length)) {
+          const finalContent =
+            full || `[Предложены действия: ${calls.map((c) => c.name).join(", ")}]`;
+          try {
+            if (aiRowId) {
+              await service
+                .from("messages")
+                .update({
+                  content: finalContent,
+                  sources: sources.length ? sources : null,
+                })
+                .eq("id", aiRowId);
+            } else {
+              await service.from("messages").insert({
+                channel_id: channelId,
+                user_id: null,
+                content: finalContent,
+                is_ai: true,
+                sources: sources.length ? sources : null,
+              });
+            }
+          } catch (e) {
+            console.error("final AI save failed:", (e as Error).message);
+          }
         }
       }
     },

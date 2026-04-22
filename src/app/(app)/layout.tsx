@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/app-shell";
 import { BrandingProvider, type Branding } from "@/components/branding-provider";
 import { ApiHealthProvider } from "@/components/api-health";
+import { isSuperadmin } from "@/lib/admin";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
@@ -37,7 +38,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <BrandingProvider value={branding}>
       <ApiHealthProvider>
         <AppShell
-          user={{ id: user.id, email: user.email ?? "", fullName: profile.full_name ?? "" }}
+          user={{
+            id: user.id,
+            email: user.email ?? "",
+            fullName: profile.full_name ?? "",
+            isSuperadmin: isSuperadmin(user.email),
+          }}
         >
           {children}
         </AppShell>

@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/adapters/email";
 import { sendTelegramMessage } from "@/adapters/telegram";
 import { createCalendarEvent } from "@/adapters/calendar";
+import { embed } from "@/lib/embeddings";
 
 export const runtime = "nodejs";
 
@@ -62,6 +63,36 @@ export async function POST(req: NextRequest) {
           .or(`name.ilike.%${q}%,contact.ilike.%${q}%,email.ilike.%${q}%`)
           .limit(5);
         result = { ok: true, clients: data ?? [] };
+        break;
+      }
+      case "remember_fact": {
+        const content = String((body.params as any).content ?? "").trim();
+        const kind = ["fact", "preference", "agreement", "rule"].includes(
+          String((body.params as any).kind)
+        )
+          ? String((body.params as any).kind)
+          : "fact";
+        if (!content) {
+          result = { ok: false, error: "empty fact" };
+          break;
+        }
+        let vec: number[] | null = null;
+        try {
+          vec = await embed(content);
+        } catch {}
+        const { data: mem, error: mErr } = await service
+          .from("memories")
+          .insert({
+            company_id: companyId,
+            content: content.slice(0, 1000),
+            kind,
+            source: "chat",
+            created_by: user.id,
+            embedding: (vec ?? null) as any,
+          })
+          .select("id, content, kind")
+          .single();
+        result = mErr ? { ok: false, error: mErr.message } : { ok: true, memory: mem };
         break;
       }
       case "generate_document": {

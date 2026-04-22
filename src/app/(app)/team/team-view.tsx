@@ -67,6 +67,21 @@ export function TeamView({
   const [showCreate, setShowCreate] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // --- @-упоминания ---
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null); // null = нет активного меншна
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionMatches = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return companyMembers
+      .filter((m) => m.id !== currentUser.id)
+      .filter((m) => {
+        const s = `${m.full_name ?? ""} ${m.email}`.toLowerCase();
+        return q === "" || s.includes(q);
+      })
+      .slice(0, 6);
+  }, [companyMembers, currentUser.id, mentionQuery]);
+
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -153,6 +168,45 @@ export function TeamView({
     () => new Map(companyMembers.map((m) => [m.id, m])),
     [companyMembers]
   );
+
+  // Отслеживает незаконченное «@query» непосредственно перед курсором.
+  function recomputeMention(value: string, caret: number) {
+    const before = value.slice(0, caret);
+    const at = before.lastIndexOf("@");
+    if (at < 0) {
+      setMentionQuery(null);
+      return;
+    }
+    const prev = at === 0 ? " " : before[at - 1];
+    const sep = /[\s\n]/.test(prev) || at === 0;
+    const query = before.slice(at + 1);
+    if (sep && !/\s/.test(query)) {
+      setMentionQuery(query);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+  }
+
+  function insertMention(member: Member) {
+    const el = textareaRef.current;
+    if (!el) return;
+    const caret = el.selectionStart ?? input.length;
+    const before = input.slice(0, caret);
+    const after = input.slice(caret);
+    const at = before.lastIndexOf("@");
+    if (at < 0) return;
+    const handle = (member.full_name || member.email.split("@")[0] || "user").replace(/\s+/g, "_");
+    const token = `@${handle} `;
+    const next = before.slice(0, at) + token + after;
+    setInput(next);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      const pos = at + token.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }
 
   async function sendMessage() {
     if (!current || !input.trim() || sending) return;
@@ -376,17 +430,79 @@ export function TeamView({
                     e.preventDefault();
                     sendMessage();
                   }}
-                  className="flex items-end gap-2 rounded-2xl bg-white border p-2.5"
+                  className="relative flex items-end gap-2 rounded-2xl bg-white border p-2.5"
                   style={{
                     borderColor: `color-mix(in srgb, ${brand.accentColor} 15%, transparent)`,
                   }}
                 >
+                  {mentionQuery !== null && mentionMatches.length > 0 && (
+                    <div className="absolute left-2 right-2 bottom-full mb-2 rounded-xl border border-border bg-popover shadow-lg overflow-hidden z-10">
+                      {mentionMatches.map((m, i) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            insertMention(m);
+                          }}
+                          className={cn(
+                            "w-full text-left px-3 py-2 flex items-center gap-2 text-[13px]",
+                            i === mentionIndex ? "bg-muted" : "hover:bg-muted/60"
+                          )}
+                        >
+                          <span
+                            className="w-6 h-6 rounded-full grid place-items-center text-white text-[10px] font-medium shrink-0"
+                            style={{
+                              background: `color-mix(in srgb, ${brand.accentColor} 80%, #000 0%)`,
+                            }}
+                          >
+                            {((m.full_name ?? m.email)[0] ?? "?").toUpperCase()}
+                          </span>
+                          <span className="truncate">
+                            {m.full_name || m.email.split("@")[0]}
+                          </span>
+                          <span className="ml-auto text-[11px] text-muted-foreground truncate">
+                            {m.position ?? m.email}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <textarea
                     ref={textareaRef}
                     rows={1}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      recomputeMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                    }}
+                    onKeyUp={(e) => {
+                      const el = e.currentTarget;
+                      recomputeMention(el.value, el.selectionStart ?? el.value.length);
+                    }}
                     onKeyDown={(e) => {
+                      if (mentionQuery !== null && mentionMatches.length > 0) {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setMentionIndex((i) => (i + 1) % mentionMatches.length);
+                          return;
+                        }
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setMentionIndex((i) => (i - 1 + mentionMatches.length) % mentionMatches.length);
+                          return;
+                        }
+                        if (e.key === "Enter" || e.key === "Tab") {
+                          e.preventDefault();
+                          insertMention(mentionMatches[mentionIndex]);
+                          return;
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setMentionQuery(null);
+                          return;
+                        }
+                      }
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         sendMessage();
@@ -395,7 +511,7 @@ export function TeamView({
                     placeholder={
                       current.type === "ai"
                         ? `Спросите ${brand.assistantName}…`
-                        : "Сообщение команде"
+                        : "Сообщение команде (введите @ чтобы упомянуть)"
                     }
                     className="flex-1 resize-none bg-transparent outline-none px-1.5 py-1.5 text-[16px] md:text-[15px] leading-[1.5] max-h-[140px]"
                     style={{ minHeight: 34 }}
@@ -500,7 +616,7 @@ function MsgRow({
           {label} · {formatDate(msg.created_at)}
         </div>
         <div className="mt-0.5 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-          {msg.content}
+          <MentionedText text={msg.content} accent={brand.accentColor} />
         </div>
       </div>
       <button
@@ -515,6 +631,31 @@ function MsgRow({
         <Pin className="w-4 h-4" />
       </button>
     </div>
+  );
+}
+
+function MentionedText({ text, accent }: { text: string; accent: string }) {
+  // Разбиваем по токенам @word_or_dotted, остальное рендерим как есть.
+  const parts = text.split(/(@[\p{L}\p{N}_.-]+)/u);
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.startsWith("@") && p.length > 1 ? (
+          <span
+            key={i}
+            className="rounded px-1 font-medium"
+            style={{
+              background: `color-mix(in srgb, ${accent} 14%, transparent)`,
+              color: accent,
+            }}
+          >
+            {p}
+          </span>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      )}
+    </>
   );
 }
 

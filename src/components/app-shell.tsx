@@ -13,12 +13,13 @@ import {
   MessagesSquare,
   Settings,
   LogOut,
+  Shield,
 } from "lucide-react";
 import { useBranding } from "@/components/branding-provider";
 import { AssistantAvatar } from "@/components/assistant-avatar";
 import { ApiErrorBanner } from "@/components/api-health";
 
-export type AppUser = { id: string; email: string; fullName: string };
+export type AppUser = { id: string; email: string; fullName: string; isSuperadmin?: boolean };
 
 const NAV = [
   { href: "/chat", label: "Чат", icon: MessageSquare },
@@ -108,6 +109,20 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               </Link>
             );
           })}
+
+          {user.isSuperadmin && (
+            <Link
+              href="/admin"
+              className={cn(
+                "mt-2 flex items-center gap-2.5 rounded-xl px-3 h-10 text-sm transition border border-destructive/20",
+                pathname.startsWith("/admin")
+                  ? "text-destructive font-medium bg-destructive/10"
+                  : "text-destructive/80 hover:bg-destructive/10"
+              )}
+            >
+              <Shield className="w-4 h-4" /> Админка
+            </Link>
+          )}
         </nav>
 
         <div className="p-3 border-t border-border/60">

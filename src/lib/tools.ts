@@ -7,6 +7,26 @@ export const ACTION_TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "remember_fact",
+      description:
+        "Сохранить долговременный факт в корпоративную память компании (о клиентах, договорённостях, правилах, ценах). Используй, когда пользователь явно просит запомнить или сообщает стабильную информацию.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "Факт одним предложением" },
+          kind: {
+            type: "string",
+            enum: ["fact", "preference", "agreement", "rule"],
+            description: "Тип факта",
+          },
+        },
+        required: ["content"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "send_email",
       description: "Отправить email клиенту от имени сотрудника. Требует подтверждения пользователя перед отправкой.",
       parameters: {

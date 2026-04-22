@@ -1,14 +1,32 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Paperclip, Plus } from "lucide-react";
+import { ArrowUp, Paperclip, Plus, FileText, X, Loader2, Check, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
 import { useBranding } from "@/components/branding-provider";
 import { AssistantAvatar } from "@/components/assistant-avatar";
 import { bucket } from "@/lib/plans";
 import Link from "next/link";
 import { useApiHealth } from "@/components/api-health";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
+
+type Attachment = {
+  id: string;
+  name: string;
+  size: number;
+  status: "uploading" | "ready" | "error";
+  error?: string;
+};
+
+type ToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status?: "pending" | "running" | "done" | "error";
+  result?: any;
+};
 
 type Msg = {
   id: string;
@@ -17,6 +35,7 @@ type Msg = {
   sources?: Array<{ document_id: string; snippet: string; name?: string }>;
   created_at?: string;
   streaming?: boolean;
+  toolCalls?: ToolCall[];
 };
 
 const DEFAULT_SUGGESTIONS = [
@@ -45,7 +64,9 @@ export function ChatView({
   quota?: { used: number; limit: number; planName: string };
 }) {
   const brand = useBranding();
+  const router = useRouter();
   const { recordSuccess, recordFailure } = useApiHealth();
+  const [creatingSession, setCreatingSession] = useState(false);
 
   const [messages, setMessages] = useState<Msg[]>(
     initialMessages.map((m) => ({
@@ -58,10 +79,12 @@ export function ChatView({
   );
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const stuckToBottomRef = useRef(true);
 
   // Отслеживаем, находится ли пользователь у самого низа
@@ -94,20 +117,216 @@ export function ChatView({
     el.style.height = Math.min(el.scrollHeight, max) + "px";
   }, [input]);
 
+  // Realtime: подхватываем AI-ответ, если он пишется в БД на сервере,
+  // пока пользователь был на другой вкладке. Сервер сохраняет прогрессивно
+  // (см. /api/chat), так что UPDATE-события докручивают контент.
+  useEffect(() => {
+    if (!channelId) return;
+    const supabase = createBrowserClient();
+    const sub = supabase
+      .channel(`chat:${channelId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `channel_id=eq.${channelId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          setMessages((m) => {
+            if (m.some((x) => x.id === row.id)) return m;
+            // Если есть streaming-плейсхолдер ассистента — «усыновляем» его DB-id,
+            // чтобы последующие UPDATE применялись по правильному ключу.
+            if (row.is_ai) {
+              const idx = m.findIndex((x) => x.streaming && x.role === "assistant");
+              if (idx >= 0) {
+                const next = [...m];
+                next[idx] = {
+                  ...next[idx],
+                  id: row.id,
+                  content: next[idx].content || row.content || "",
+                  sources: next[idx].sources ?? row.sources ?? undefined,
+                };
+                return next;
+              }
+            } else {
+              // User-сообщение: локальное добавляется мгновенно с клиентским UUID.
+              // Совпадает по content — перевешиваем на DB id.
+              for (let i = m.length - 1; i >= 0; i--) {
+                const msg = m[i];
+                if (msg.role === "user" && msg.content === row.content && msg.id !== row.id) {
+                  const next = [...m];
+                  next[i] = { ...msg, id: row.id, created_at: row.created_at };
+                  return next;
+                }
+              }
+            }
+            return [
+              ...m,
+              {
+                id: row.id,
+                role: row.is_ai ? "assistant" : "user",
+                content: row.content,
+                sources: row.sources ?? undefined,
+                created_at: row.created_at,
+              },
+            ];
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `channel_id=eq.${channelId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          setMessages((m) =>
+            m.map((x) =>
+              x.id === row.id
+                ? {
+                    ...x,
+                    content: row.content ?? x.content,
+                    sources: row.sources ?? x.sources,
+                  }
+                : x
+            )
+          );
+        }
+      )
+      .subscribe();
+    return () => {
+      sub.unsubscribe();
+    };
+  }, [channelId]);
+
+  async function uploadFiles(files: FileList | File[]) {
+    const arr = Array.from(files);
+    for (const file of arr) {
+      const id = crypto.randomUUID();
+      setAttachments((a) => [...a, { id, name: file.name, size: file.size, status: "uploading" }]);
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new Error(detail?.slice(0, 160) || `HTTP ${res.status}`);
+        }
+        setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "ready" } : x)));
+      } catch (e) {
+        setAttachments((a) =>
+          a.map((x) =>
+            x.id === id ? { ...x, status: "error", error: (e as Error).message } : x
+          )
+        );
+      }
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((a) => a.filter((x) => x.id !== id));
+  }
+
+  async function runToolCall(msgId: string, call: ToolCall) {
+    setMessages((m) =>
+      m.map((msg) =>
+        msg.id === msgId
+          ? {
+              ...msg,
+              toolCalls: msg.toolCalls?.map((c) =>
+                c.id === call.id ? { ...c, status: "running" } : c
+              ),
+            }
+          : msg
+      )
+    );
+    try {
+      const res = await fetch("/api/actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: call.name,
+          params: call.arguments,
+          confirmed: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === msgId
+            ? {
+                ...msg,
+                toolCalls: msg.toolCalls?.map((c) =>
+                  c.id === call.id
+                    ? {
+                        ...c,
+                        status: data?.ok ? "done" : "error",
+                        result: data,
+                      }
+                    : c
+                ),
+              }
+            : msg
+        )
+      );
+    } catch (e) {
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === msgId
+            ? {
+                ...msg,
+                toolCalls: msg.toolCalls?.map((c) =>
+                  c.id === call.id
+                    ? { ...c, status: "error", result: { error: (e as Error).message } }
+                    : c
+                ),
+              }
+            : msg
+        )
+      );
+    }
+  }
+
   async function send(text: string) {
-    if (!text.trim() || sending) return;
+    // разрешаем отправку если есть хотя бы готовое вложение, даже с пустым текстом
+    const readyFiles = attachments.filter((a) => a.status === "ready");
+    if ((!text.trim() && readyFiles.length === 0) || sending) return;
+    // если есть ещё грузящиеся файлы — подождём
+    if (attachments.some((a) => a.status === "uploading")) return;
+
     setSending(true);
     setInput("");
     stuckToBottomRef.current = true;
 
+    // Добавляем в текст пользователя упоминание приложенных файлов.
+    // Контент файлов уже в pgvector через /api/upload → RAG подхватит.
+    const filesNote =
+      readyFiles.length > 0
+        ? `\n\n[Прикреплённые файлы: ${readyFiles.map((f) => f.name).join(", ")}]`
+        : "";
+    const effective = (text.trim() || "Разобрать приложенные файлы") + filesNote;
+
+    const displayContent =
+      readyFiles.length > 0
+        ? `${text.trim()}${text.trim() ? "\n" : ""}📎 ${readyFiles.map((f) => f.name).join(", ")}`.trim()
+        : text;
+
     const userMsg: Msg = {
       id: crypto.randomUUID(),
       role: "user",
-      content: text,
+      content: displayContent,
       created_at: new Date().toISOString(),
     };
     const pendingAi: Msg = { id: crypto.randomUUID(), role: "assistant", content: "", streaming: true };
     setMessages((m) => [...m, userMsg, pendingAi]);
+    // очищаем чипы после отправки (файлы остаются в базе знаний)
+    setAttachments([]);
 
     try {
       const res = await fetch("/api/chat", {
@@ -115,7 +334,7 @@ export function ChatView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channelId,
-          message: text,
+          message: effective,
           history: messages.slice(-8).map((m) => ({ role: m.role, content: m.content })),
         }),
       });
@@ -165,6 +384,18 @@ export function ChatView({
               setMessages((m) =>
                 m.map((msg) => (msg.id === pendingAi.id ? { ...msg, content: acc, sources } : msg))
               );
+            } else if (evt.type === "tool_calls" && Array.isArray(evt.calls)) {
+              const calls: ToolCall[] = evt.calls.map((c: any) => ({
+                id: c.id,
+                name: c.name,
+                arguments: c.arguments ?? {},
+                status: "pending",
+              }));
+              setMessages((m) =>
+                m.map((msg) =>
+                  msg.id === pendingAi.id ? { ...msg, toolCalls: calls } : msg
+                )
+              );
             }
           } catch {}
         }
@@ -191,7 +422,10 @@ export function ChatView({
   const empty = messages.length === 0;
   const quotaBucket = quota ? bucket(quota.used, quota.limit) : null;
   const quotaBlocked = !!quotaBucket?.block;
-  const canSend = input.trim().length > 0 && !sending && !quotaBlocked;
+  const anyUploading = attachments.some((a) => a.status === "uploading");
+  const anyReady = attachments.some((a) => a.status === "ready");
+  const canSend =
+    (input.trim().length > 0 || anyReady) && !sending && !quotaBlocked && !anyUploading;
 
   const promptBorder = useMemo(
     () => ({ borderColor: `color-mix(in srgb, ${brand.accentColor} 15%, transparent)` }),
@@ -212,10 +446,30 @@ export function ChatView({
           </div>
         </div>
         <button
-          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 h-9 text-[13px] hover:bg-muted transition"
+          type="button"
+          disabled={creatingSession}
+          onClick={async () => {
+            if (creatingSession) return;
+            setCreatingSession(true);
+            try {
+              const res = await fetch("/api/chat/new-session", { method: "POST" });
+              if (res.ok) {
+                setMessages([]);
+                setAttachments([]);
+                router.refresh();
+              }
+            } catch {}
+            finally { setCreatingSession(false); }
+          }}
+          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 h-9 text-[13px] hover:bg-muted transition disabled:opacity-60"
           aria-label="Новый чат"
         >
-          <Plus className="w-4 h-4" /> Новый
+          {creatingSession ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Plus className="w-4 h-4" />
+          )}
+          Новый
         </button>
       </header>
 
@@ -262,7 +516,7 @@ export function ChatView({
           ) : (
             <div className="space-y-5">
               {messages.map((m) => (
-                <MessageBubble key={m.id} msg={m} />
+                <MessageBubble key={m.id} msg={m} onRunTool={(c) => runToolCall(m.id, c)} />
               ))}
             </div>
           )}
@@ -276,6 +530,13 @@ export function ChatView({
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 12px)" }}
       >
         <div className="mx-auto w-full max-w-3xl">
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {attachments.map((a) => (
+                <AttachmentChip key={a.id} a={a} onRemove={() => removeAttachment(a.id)} />
+              ))}
+            </div>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -284,12 +545,24 @@ export function ChatView({
             className="flex items-end gap-2 rounded-2xl bg-white border p-2.5 shadow-sm"
             style={promptBorder}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.txt,.md,.csv,.xlsx"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length) uploadFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
             <button
               type="button"
-              className="w-9 h-9 rounded-full grid place-items-center text-muted-foreground hover:bg-muted transition shrink-0"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-9 h-9 rounded-full grid place-items-center text-muted-foreground hover:bg-muted transition shrink-0 disabled:opacity-50"
               aria-label="Прикрепить файл"
-              title="Прикрепить файл (скоро)"
-              disabled
+              title="Прикрепить файл (PDF, DOCX, TXT, CSV)"
+              disabled={quotaBlocked || sending}
             >
               <Paperclip className="w-4 h-4" />
             </button>
@@ -339,27 +612,42 @@ export function ChatView({
   );
 }
 
-function MessageBubble({ msg }: { msg: Msg }) {
+function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall) => void }) {
   const brand = useBranding();
   const isAi = msg.role === "assistant";
 
   if (isAi) {
+    const hasText = !!msg.content && msg.content.trim().length > 0;
+    const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;
     return (
       <div className="flex gap-2.5 animate-fade-in">
         <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={28} />
-        <div className="max-w-[85%] space-y-1">
-          <div
-            className="inline-block px-4 py-2.5 text-[15px] leading-relaxed bg-[#f5f5f5] text-[#0a0a0a]"
-            style={{ borderRadius: "18px 18px 18px 4px" }}
-          >
-            {msg.content ? (
-              <div className="prose prose-sm max-w-none [&>p]:my-1 [&>ul]:my-2">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              </div>
-            ) : (
-              <TypingDots color={brand.assistantColor} />
-            )}
-          </div>
+        <div className="max-w-[85%] space-y-1.5">
+          {(hasText || !hasTools) && (
+            <div
+              className="inline-block px-4 py-2.5 text-[15px] leading-relaxed bg-[#f5f5f5] text-[#0a0a0a]"
+              style={{ borderRadius: "18px 18px 18px 4px" }}
+            >
+              {msg.content ? (
+                <div className="prose prose-sm max-w-none [&>p]:my-1 [&>ul]:my-2">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+              ) : (
+                <TypingDots color={brand.assistantColor} />
+              )}
+            </div>
+          )}
+          {hasTools && (
+            <div className="space-y-1.5">
+              {msg.toolCalls!.map((c) => (
+                <ToolCallCard
+                  key={c.id}
+                  call={c}
+                  onRun={onRunTool ? () => onRunTool(c) : undefined}
+                />
+              ))}
+            </div>
+          )}
           {msg.sources && msg.sources.length > 0 && (
             <div className="pl-1 text-[11px] text-muted-foreground">
               Источник: {msg.sources[0].name ?? "база знаний"}
@@ -411,6 +699,107 @@ function MessageBubble({ msg }: { msg: Msg }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  send_email: "Отправить email",
+  send_telegram: "Написать в Telegram",
+  create_meeting: "Создать встречу",
+  add_to_calendar: "Добавить в календарь",
+  find_client: "Найти клиента",
+  generate_document: "Сгенерировать документ",
+  remember_fact: "Запомнить факт",
+};
+
+function ToolCallCard({ call, onRun }: { call: ToolCall; onRun?: () => void }) {
+  const label = TOOL_LABELS[call.name] ?? call.name;
+  const s = call.status ?? "pending";
+  const argsList = Object.entries(call.arguments).slice(0, 6);
+  return (
+    <div className="inline-block w-full max-w-md rounded-2xl border bg-card p-3 text-[13px]">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[11px] tracking-wider uppercase text-muted-foreground">
+            Действие
+          </span>
+          <span className="font-medium truncate">{label}</span>
+        </div>
+        <span
+          className={cn(
+            "text-[11px] rounded-full px-2 py-0.5",
+            s === "done" && "bg-emerald-500/10 text-emerald-700",
+            s === "error" && "bg-destructive/10 text-destructive",
+            s === "running" && "bg-muted text-muted-foreground",
+            s === "pending" && "bg-[#F59E0B]/10 text-[#B45309]"
+          )}
+        >
+          {s === "pending"
+            ? "ждёт подтверждения"
+            : s === "running"
+            ? "выполняется…"
+            : s === "done"
+            ? "выполнено"
+            : "ошибка"}
+        </span>
+      </div>
+      {argsList.length > 0 && (
+        <dl className="mt-2 space-y-0.5 text-[12px]">
+          {argsList.map(([k, v]) => (
+            <div key={k} className="flex gap-2">
+              <dt className="text-muted-foreground shrink-0 w-24 truncate">{k}</dt>
+              <dd className="min-w-0 flex-1 truncate">{String(v ?? "")}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {s === "pending" && onRun && (
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={onRun}
+            className="rounded-full bg-foreground text-background px-3 h-8 text-[12px] font-medium"
+          >
+            Подтвердить
+          </button>
+        </div>
+      )}
+      {s === "error" && call.result?.error && (
+        <div className="mt-2 text-[12px] text-destructive">{String(call.result.error)}</div>
+      )}
+    </div>
+  );
+}
+
+function AttachmentChip({ a, onRemove }: { a: Attachment; onRemove: () => void }) {
+  const icon =
+    a.status === "uploading" ? (
+      <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+    ) : a.status === "error" ? (
+      <AlertCircle className="w-3.5 h-3.5 text-destructive" />
+    ) : (
+      <Check className="w-3.5 h-3.5 text-emerald-600" />
+    );
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] bg-card max-w-[260px]",
+        a.status === "error" ? "border-destructive/30 text-destructive" : "border-border"
+      )}
+      title={a.status === "error" ? a.error : a.name}
+    >
+      <FileText className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+      <span className="truncate max-w-[160px]">{a.name}</span>
+      {icon}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-0.5 rounded-full p-0.5 hover:bg-muted"
+        aria-label="Убрать"
+      >
+        <X className="w-3 h-3" />
+      </button>
     </div>
   );
 }
