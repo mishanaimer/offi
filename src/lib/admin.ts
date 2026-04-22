@@ -3,7 +3,7 @@
  * Список email через env: ADMIN_EMAILS=foo@bar.com,baz@qux.com
  * Плюс дефолтный встроенный список (владелец платформы).
  */
-const BUILTIN_ADMINS = ["gign230102@gmail.com"];
+const BUILTIN_ADMINS = ["gign230102@gmail.com", "ngig45@yandex.ru"];
 
 export function getAdminEmails(): string[] {
   const env = (process.env.ADMIN_EMAILS ?? "")

@@ -1,7 +1,25 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Paperclip, Plus, FileText, X, Loader2, Check, AlertCircle } from "lucide-react";
+import {
+  ArrowUp,
+  Paperclip,
+  Plus,
+  FileText,
+  X,
+  Loader2,
+  Check,
+  AlertCircle,
+  History,
+  MessageSquare,
+  Sparkles,
+  Mail,
+  Send,
+  Calendar,
+  CalendarPlus,
+  Search,
+  Brain,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
@@ -67,6 +85,12 @@ export function ChatView({
   const router = useRouter();
   const { recordSuccess, recordFailure } = useApiHealth();
   const [creatingSession, setCreatingSession] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // channelId может измениться динамически: 1) при создании нового диалога,
+  // 2) если backend создал канал автоматически (emit "session"-event).
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(channelId);
+  useEffect(() => setActiveChannelId(channelId), [channelId]);
 
   const [messages, setMessages] = useState<Msg[]>(
     initialMessages.map((m) => ({
@@ -121,17 +145,17 @@ export function ChatView({
   // пока пользователь был на другой вкладке. Сервер сохраняет прогрессивно
   // (см. /api/chat), так что UPDATE-события докручивают контент.
   useEffect(() => {
-    if (!channelId) return;
+    if (!activeChannelId) return;
     const supabase = createBrowserClient();
     const sub = supabase
-      .channel(`chat:${channelId}`)
+      .channel(`chat:${activeChannelId}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "messages",
-          filter: `channel_id=eq.${channelId}`,
+          filter: `channel_id=eq.${activeChannelId}`,
         },
         (payload) => {
           const row = payload.new as any;
@@ -182,7 +206,7 @@ export function ChatView({
           event: "UPDATE",
           schema: "public",
           table: "messages",
-          filter: `channel_id=eq.${channelId}`,
+          filter: `channel_id=eq.${activeChannelId}`,
         },
         (payload) => {
           const row = payload.new as any;
@@ -203,7 +227,7 @@ export function ChatView({
     return () => {
       sub.unsubscribe();
     };
-  }, [channelId]);
+  }, [activeChannelId]);
 
   async function uploadFiles(files: FileList | File[]) {
     const arr = Array.from(files);
@@ -333,7 +357,7 @@ export function ChatView({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          channelId,
+          channelId: activeChannelId,
           message: effective,
           history: messages.slice(-8).map((m) => ({ role: m.role, content: m.content })),
         }),
@@ -378,7 +402,9 @@ export function ChatView({
           if (payload === "[DONE]") continue;
           try {
             const evt = JSON.parse(payload);
-            if (evt.type === "sources") sources = evt.sources;
+            if (evt.type === "session" && evt.channelId) {
+              setActiveChannelId(evt.channelId);
+            } else if (evt.type === "sources") sources = evt.sources;
             else if (evt.type === "delta") {
               acc += evt.text;
               setMessages((m) =>
@@ -445,32 +471,50 @@ export function ChatView({
             <div className="text-[11px] text-muted-foreground leading-tight truncate">{brand.companyName}</div>
           </div>
         </div>
-        <button
-          type="button"
-          disabled={creatingSession}
-          onClick={async () => {
-            if (creatingSession) return;
-            setCreatingSession(true);
-            try {
-              const res = await fetch("/api/chat/new-session", { method: "POST" });
-              if (res.ok) {
-                setMessages([]);
-                setAttachments([]);
-                router.refresh();
-              }
-            } catch {}
-            finally { setCreatingSession(false); }
-          }}
-          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 h-9 text-[13px] hover:bg-muted transition disabled:opacity-60"
-          aria-label="Новый чат"
-        >
-          {creatingSession ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Plus className="w-4 h-4" />
-          )}
-          Новый
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 h-9 text-[13px] hover:bg-muted transition"
+            aria-label="История чатов"
+            title="История чатов"
+          >
+            <History className="w-4 h-4" />
+            <span className="hidden sm:inline">История</span>
+          </button>
+          <button
+            type="button"
+            disabled={creatingSession}
+            onClick={async () => {
+              if (creatingSession) return;
+              setCreatingSession(true);
+              try {
+                const res = await fetch("/api/chat/new-session", { method: "POST" });
+                if (res.ok) {
+                  const body = await res.json().catch(() => ({}));
+                  setMessages([]);
+                  setAttachments([]);
+                  if (body?.channelId) {
+                    setActiveChannelId(body.channelId);
+                    router.replace(`/chat?c=${body.channelId}`);
+                  } else {
+                    router.refresh();
+                  }
+                }
+              } catch {}
+              finally { setCreatingSession(false); }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 h-9 text-[13px] hover:bg-muted transition disabled:opacity-60"
+            aria-label="Новый чат"
+          >
+            {creatingSession ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Plus className="w-4 h-4" />
+            )}
+            Новый
+          </button>
+        </div>
       </header>
 
       {/* quota banner */}
@@ -606,6 +650,156 @@ export function ChatView({
           </p>
         </div>
       </div>
+
+      <ChatHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        currentId={activeChannelId}
+        onPick={(id) => {
+          setHistoryOpen(false);
+          if (id === activeChannelId) return;
+          router.push(`/chat?c=${id}`);
+        }}
+      />
+    </div>
+  );
+}
+
+type Session = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_message: string | null;
+  last_is_ai: boolean | null;
+  last_at: string;
+  messages_count: number;
+};
+
+function ChatHistoryDrawer({
+  open,
+  onClose,
+  currentId,
+  onPick,
+}: {
+  open: boolean;
+  onClose: () => void;
+  currentId: string | null;
+  onPick: (id: string) => void;
+}) {
+  const brand = useBranding();
+  const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    fetch("/api/chat/sessions")
+      .then((r) => r.json())
+      .then((data) => setSessions(data.sessions ?? []))
+      .catch(() => setSessions([]))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div
+        className="absolute inset-0 bg-black/30 animate-fade-in"
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside
+        className="relative ml-auto w-full sm:max-w-sm h-full bg-background border-l border-border/60 shadow-xl flex flex-col animate-slide-in-right"
+        role="dialog"
+        aria-label="История чатов"
+      >
+        <header className="h-14 shrink-0 border-b border-border/60 px-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4" style={{ color: brand.accentColor }} />
+            <span className="font-semibold text-[15px]">История диалогов</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-md hover:bg-muted"
+            aria-label="Закрыть"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="p-6 grid place-items-center text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" />
+            </div>
+          ) : !sessions || sessions.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              Пока нет сохранённых диалогов.
+            </div>
+          ) : (
+            <ul className="py-2">
+              {sessions.map((s) => {
+                const active = s.id === currentId;
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(s.id)}
+                      className={cn(
+                        "w-full text-left px-4 py-3 flex gap-3 items-start border-b border-border/40 hover:bg-muted transition",
+                        active && "bg-muted"
+                      )}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-lg grid place-items-center shrink-0"
+                        style={{
+                          background: active
+                            ? `color-mix(in srgb, ${brand.accentColor} 15%, transparent)`
+                            : "hsl(var(--muted))",
+                          color: active ? brand.accentColor : undefined,
+                        }}
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-[14px] truncate">{s.name}</span>
+                          {active && (
+                            <span
+                              className="text-[10px] rounded-full px-1.5 py-0.5 font-medium shrink-0"
+                              style={{
+                                background: `color-mix(in srgb, ${brand.accentColor} 12%, transparent)`,
+                                color: brand.accentColor,
+                              }}
+                            >
+                              текущий
+                            </span>
+                          )}
+                        </div>
+                        {s.last_message ? (
+                          <div className="mt-0.5 text-[12px] text-muted-foreground line-clamp-2">
+                            {s.last_is_ai ? "🤖 " : ""}
+                            {s.last_message}
+                          </div>
+                        ) : (
+                          <div className="mt-0.5 text-[12px] text-muted-foreground/70 italic">
+                            пустой диалог
+                          </div>
+                        )}
+                        <div className="mt-1 text-[10px] text-muted-foreground/70 flex items-center gap-2">
+                          <span>{s.messages_count} сообщ.</span>
+                          <span>·</span>
+                          <span>{formatDate(s.last_at)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
@@ -715,62 +909,150 @@ const TOOL_LABELS: Record<string, string> = {
   remember_fact: "Запомнить факт",
 };
 
+const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  send_email: Mail,
+  send_telegram: Send,
+  create_meeting: Calendar,
+  add_to_calendar: CalendarPlus,
+  find_client: Search,
+  generate_document: FileText,
+  remember_fact: Brain,
+};
+
+const ARG_LABELS: Record<string, string> = {
+  to: "Кому",
+  email: "Email",
+  subject: "Тема",
+  body: "Текст",
+  message: "Сообщение",
+  chat_id: "Чат",
+  client_name: "Клиент",
+  client: "Клиент",
+  name: "Имя",
+  title: "Заголовок",
+  date: "Дата",
+  datetime: "Дата/время",
+  time: "Время",
+  duration: "Длительность",
+  template: "Шаблон",
+  template_name: "Шаблон",
+  query: "Запрос",
+  fact: "Факт",
+};
+
 function ToolCallCard({ call, onRun }: { call: ToolCall; onRun?: () => void }) {
+  const brand = useBranding();
   const label = TOOL_LABELS[call.name] ?? call.name;
+  const Icon = TOOL_ICONS[call.name] ?? Sparkles;
   const s = call.status ?? "pending";
-  const argsList = Object.entries(call.arguments).slice(0, 6);
+  const argsList = Object.entries(call.arguments)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .slice(0, 6);
+
+  const tint = (pct: number) =>
+    `color-mix(in srgb, ${brand.accentColor} ${pct}%, transparent)`;
+
   return (
-    <div className="inline-block w-full max-w-md rounded-2xl border bg-card p-3 text-[13px]">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11px] tracking-wider uppercase text-muted-foreground">
-            Действие
+    <div
+      className="inline-block w-full max-w-md rounded-2xl border bg-card overflow-hidden text-[13px] shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+      style={{
+        borderColor: s === "pending" ? tint(22) : undefined,
+        background:
+          s === "pending"
+            ? `linear-gradient(180deg, ${tint(6)} 0%, transparent 80%)`
+            : undefined,
+      }}
+    >
+      {/* header */}
+      <div className="flex items-center justify-between gap-2 px-3.5 pt-3 pb-2">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span
+            className="w-7 h-7 rounded-lg grid place-items-center shrink-0"
+            style={{ background: tint(12), color: brand.accentColor }}
+          >
+            <Icon className="w-3.5 h-3.5" />
           </span>
-          <span className="font-medium truncate">{label}</span>
+          <div className="min-w-0">
+            <div className="text-[10px] tracking-[0.12em] uppercase text-muted-foreground leading-none">
+              Действие ассистента
+            </div>
+            <div className="mt-1 font-semibold truncate text-[14px] leading-tight">{label}</div>
+          </div>
         </div>
-        <span
-          className={cn(
-            "text-[11px] rounded-full px-2 py-0.5",
-            s === "done" && "bg-emerald-500/10 text-emerald-700",
-            s === "error" && "bg-destructive/10 text-destructive",
-            s === "running" && "bg-muted text-muted-foreground",
-            s === "pending" && "bg-[#F59E0B]/10 text-[#B45309]"
-          )}
-        >
-          {s === "pending"
-            ? "ждёт подтверждения"
-            : s === "running"
-            ? "выполняется…"
-            : s === "done"
-            ? "выполнено"
-            : "ошибка"}
-        </span>
+        <StatusPill status={s} />
       </div>
+
+      {/* args */}
       {argsList.length > 0 && (
-        <dl className="mt-2 space-y-0.5 text-[12px]">
+        <dl
+          className="mx-3.5 mb-2.5 rounded-xl px-3 py-2 space-y-1 text-[12px]"
+          style={{ background: "hsl(var(--muted) / 0.6)" }}
+        >
           {argsList.map(([k, v]) => (
             <div key={k} className="flex gap-2">
-              <dt className="text-muted-foreground shrink-0 w-24 truncate">{k}</dt>
-              <dd className="min-w-0 flex-1 truncate">{String(v ?? "")}</dd>
+              <dt className="text-muted-foreground shrink-0 w-24 truncate">
+                {ARG_LABELS[k] ?? k}
+              </dt>
+              <dd className="min-w-0 flex-1 break-words text-foreground/90">
+                {String(v ?? "")}
+              </dd>
             </div>
           ))}
         </dl>
       )}
+
+      {/* footer */}
       {s === "pending" && onRun && (
-        <div className="mt-3 flex gap-2">
+        <div
+          className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-t"
+          style={{ borderColor: tint(18), background: tint(4) }}
+        >
+          <span className="text-[11px] text-muted-foreground">
+            Нажмите, чтобы {brand.assistantName} выполнил это действие
+          </span>
           <button
             type="button"
             onClick={onRun}
-            className="rounded-full bg-foreground text-background px-3 h-8 text-[12px] font-medium"
+            className="rounded-full text-white px-3.5 h-8 text-[12px] font-medium shrink-0 transition hover:opacity-90"
+            style={{ background: brand.accentColor }}
           >
             Подтвердить
           </button>
         </div>
       )}
-      {s === "error" && call.result?.error && (
-        <div className="mt-2 text-[12px] text-destructive">{String(call.result.error)}</div>
+      {s === "running" && (
+        <div className="px-3.5 py-2 border-t border-border/60 text-[11px] text-muted-foreground flex items-center gap-2">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Выполняется…
+        </div>
+      )}
+      {s === "done" && (
+        <div className="px-3.5 py-2 border-t border-emerald-500/20 bg-emerald-500/5 text-[11px] text-emerald-700 flex items-center gap-2">
+          <Check className="w-3 h-3" />
+          Действие выполнено
+        </div>
+      )}
+      {s === "error" && (
+        <div className="px-3.5 py-2 border-t border-destructive/20 bg-destructive/5 text-[12px] text-destructive">
+          {call.result?.error ? String(call.result.error) : "Не удалось выполнить действие"}
+        </div>
       )}
     </div>
+  );
+}
+
+function StatusPill({ status }: { status: NonNullable<ToolCall["status"]> }) {
+  const map: Record<typeof status, { label: string; cls: string }> = {
+    pending: { label: "ждёт подтверждения", cls: "bg-[#F59E0B]/10 text-[#B45309]" },
+    running: { label: "выполняется", cls: "bg-muted text-muted-foreground" },
+    done: { label: "готово", cls: "bg-emerald-500/10 text-emerald-700" },
+    error: { label: "ошибка", cls: "bg-destructive/10 text-destructive" },
+  };
+  const { label, cls } = map[status];
+  return (
+    <span className={cn("text-[10px] rounded-full px-2 py-0.5 font-medium shrink-0", cls)}>
+      {label}
+    </span>
   );
 }
 

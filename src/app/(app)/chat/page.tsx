@@ -4,18 +4,27 @@ import { currentPeriod, getPlan } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
-export default async function ChatPage() {
+export default async function ChatPage({
+  searchParams,
+}: {
+  searchParams?: { c?: string };
+}) {
   const supabase = createClient();
+  const requestedChannel = searchParams?.c?.trim() || null;
 
-  // Берём САМЫЙ СВЕЖИЙ AI-канал, чтобы кнопка «Новый» открывала новый диалог.
+  // Если явно задан ?c=<id> — берём этот канал. Иначе — самый свежий AI-канал.
+  const channelPromise = requestedChannel
+    ? supabase.from("channels").select("*").eq("id", requestedChannel).eq("type", "ai").maybeSingle()
+    : supabase
+        .from("channels")
+        .select("*")
+        .eq("type", "ai")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
   const [channelRes, companyRes, usageRes] = await Promise.all([
-    supabase
-      .from("channels")
-      .select("*")
-      .eq("type", "ai")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    channelPromise,
     supabase.from("companies").select("plan").maybeSingle(),
     supabase
       .from("usage_counters")
@@ -25,16 +34,17 @@ export default async function ChatPage() {
   ]);
   const channel = channelRes.data;
 
-  // Берём ПОСЛЕДНИЕ 100 сообщений (desc → reverse), иначе при >100 сообщениях новые исчезают.
+  // Берём ВСЕ сообщения канала (до 500 — практически без потерь).
+  // Сортируем ascending, чтобы сохранить исходный порядок диалога.
   const { data: latest } = channel
     ? await supabase
         .from("messages")
         .select("*")
         .eq("channel_id", channel.id)
-        .order("created_at", { ascending: false })
-        .limit(100)
+        .order("created_at", { ascending: true })
+        .limit(500)
     : { data: [] };
-  const messages = (latest ?? []).slice().reverse();
+  const messages = latest ?? [];
 
   const plan = getPlan(companyRes.data?.plan);
   const used = usageRes.data?.requests_count ?? 0;

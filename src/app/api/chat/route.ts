@@ -43,7 +43,7 @@ type ReqBody = {
 };
 
 export async function POST(req: NextRequest) {
-  const { message, history = [], channelId }: ReqBody = await req.json();
+  const { message, history = [], channelId: reqChannelId }: ReqBody = await req.json();
   if (!message?.trim()) return new Response("empty message", { status: 400 });
 
   const supabase = createClient();
@@ -59,6 +59,36 @@ export async function POST(req: NextRequest) {
   if (!company) return new Response("no company", { status: 400 });
 
   const service = createServiceClient();
+
+  // --- гарантируем AI-канал: если клиент не передал id — создаём новый,
+  // чтобы сообщения не терялись (исторически первое сообщение до онбординга
+  // или после неудачного new-session оставалось без channel_id).
+  let channelId: string | null = reqChannelId;
+  if (!channelId) {
+    const { data: existing } = await service
+      .from("channels")
+      .select("id")
+      .eq("company_id", company.id)
+      .eq("type", "ai")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    channelId = existing?.id ?? null;
+  }
+  if (!channelId) {
+    const { data: newChan } = await service
+      .from("channels")
+      .insert({
+        company_id: company.id,
+        name: `Диалог от ${new Date().toLocaleDateString("ru-RU")}`,
+        type: "ai",
+        created_by: user.id,
+      })
+      .select("id")
+      .single();
+    channelId = newChan?.id ?? null;
+  }
+  const createdNewChannel = channelId !== reqChannelId;
 
   // --- Лимит запросов по тарифу ---
   const period = currentPeriod();
@@ -204,6 +234,13 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
+      if (createdNewChannel && channelId) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "session", channelId })}\n\n`
+          )
+        );
+      }
       if (sources.length || memorySources.length) {
         controller.enqueue(
           encoder.encode(

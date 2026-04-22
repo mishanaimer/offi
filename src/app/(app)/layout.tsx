@@ -4,11 +4,20 @@ import { AppShell } from "@/components/app-shell";
 import { BrandingProvider, type Branding } from "@/components/branding-provider";
 import { ApiHealthProvider } from "@/components/api-health";
 import { isSuperadmin } from "@/lib/admin";
+import { ensureAdminPlatformCompany } from "@/lib/platform-seed";
+import { BugReportOverlay } from "@/components/bug-report-overlay";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
+
+  // Супер-админ платформы без компании → авто-сидим «Offi» / ассистент «Оффи»
+  // (чтобы ngig45@yandex.ru и gign230102@gmail.com сразу попадали в платформу
+  // с фирменной айдентикой Offi, минуя онбординг).
+  if (isSuperadmin(user.email)) {
+    await ensureAdminPlatformCompany(user.id, user.email ?? "");
+  }
 
   const { data: profile } = await supabase
     .from("users")
@@ -55,6 +64,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         >
           {children}
         </AppShell>
+        <BugReportOverlay />
       </ApiHealthProvider>
     </BrandingProvider>
   );
