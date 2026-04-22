@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn, formatDate } from "@/lib/utils";
 import { useBranding } from "@/components/branding-provider";
-import { AssistantAvatar } from "@/components/assistant-avatar";
+import { MascotAvatar } from "@/components/mascot";
 import { useApiHealth } from "@/components/api-health";
 
 type Channel = { id: string; name: string; type: string; created_at: string };
@@ -393,11 +393,7 @@ export function TeamView({
                 ))}
                 {invokingAi && (
                   <div className="flex gap-2.5 items-start">
-                    <AssistantAvatar
-                      icon={brand.assistantIcon}
-                      color={brand.assistantColor}
-                      size={28}
-                    />
+                    <MascotAvatar state="working" animated size={32} />
                     <div
                       className="px-4 py-2.5 bg-[#f5f5f5]"
                       style={{ borderRadius: "18px 18px 18px 4px" }}
@@ -584,7 +580,7 @@ function MsgRow({
   if (msg.is_ai) {
     return (
       <div className="flex gap-2.5 items-start">
-        <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={28} />
+        <MascotAvatar size={32} />
         <div className="max-w-[85%]">
           <div
             className="inline-block px-4 py-2.5 text-[15px] leading-relaxed bg-[#f5f5f5] text-[#0a0a0a] whitespace-pre-wrap"

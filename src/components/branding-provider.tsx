@@ -8,10 +8,17 @@ export type Branding = {
   assistantName: string;
   accentColor: string;       // HEX, #RRGGBB
   assistantColor: string;    // HEX, для аватарки ассистента
-  assistantIcon: string;     // sparkles | bot | zap | star | flame
+  assistantIcon: string;     // sparkles | bot | zap | star | flame (legacy, fallback)
   welcomeMessage: string;    // приветствие в пустом чате
   logoUrl: string | null;
   role: "owner" | "admin" | "member";
+  mascot: {
+    enabled: boolean;
+    headShape: "classic" | "soft" | "wide" | "tall" | "capsule";
+    antenna: "ball" | "pill" | "bent" | "bolt" | "dot" | "ring" | "none";
+    ears: "round" | "rect" | "small" | "none";
+    bg: string;              // HEX фона визора
+  };
 };
 
 const BrandingContext = createContext<Branding | null>(null);

@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
 import { useBranding } from "@/components/branding-provider";
-import { AssistantAvatar } from "@/components/assistant-avatar";
+import { MascotAvatar } from "@/components/mascot";
 import { bucket } from "@/lib/plans";
 import Link from "next/link";
 import { useApiHealth } from "@/components/api-health";
@@ -439,7 +439,7 @@ export function ChatView({
         className="h-14 shrink-0 glass border-b border-border/60 px-3 md:px-6 flex items-center justify-between sticky top-0 z-10"
       >
         <div className="flex items-center gap-2.5 min-w-0">
-          <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={28} />
+          <MascotAvatar state={sending ? "working" : "idle"} animated={sending} size={32} />
           <div className="min-w-0">
             <div className="text-[14px] font-semibold leading-tight truncate">{brand.assistantName}</div>
             <div className="text-[11px] text-muted-foreground leading-tight truncate">{brand.companyName}</div>
@@ -508,8 +508,6 @@ export function ChatView({
           {empty ? (
             <EmptyState
               welcome={brand.welcomeMessage}
-              assistantIcon={brand.assistantIcon}
-              assistantColor={brand.assistantColor}
               suggestions={suggestions}
               onPick={(t) => send(t)}
             />
@@ -621,7 +619,11 @@ function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall)
     const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;
     return (
       <div className="flex gap-2.5 animate-fade-in">
-        <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={28} />
+        <MascotAvatar
+          state={msg.streaming ? "working" : "idle"}
+          animated={!!msg.streaming}
+          size={32}
+        />
         <div className="max-w-[85%] space-y-1.5">
           {(hasText || !hasTools) && (
             <div
@@ -820,21 +822,17 @@ function TypingDots({ color }: { color: string }) {
 
 function EmptyState({
   welcome,
-  assistantIcon,
-  assistantColor,
   suggestions,
   onPick,
 }: {
   welcome: string;
-  assistantIcon: string;
-  assistantColor: string;
   suggestions: string[];
   onPick: (t: string) => void;
 }) {
   return (
     <div className="pt-8 md:pt-16 pb-4 text-center">
       <div className="inline-flex">
-        <AssistantAvatar icon={assistantIcon} color={assistantColor} size={56} />
+        <MascotAvatar size={96} animated />
       </div>
       <h1 className="mt-5 text-[22px] md:text-2xl font-semibold tracking-tight">
         {welcome}

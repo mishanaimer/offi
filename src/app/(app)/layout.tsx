@@ -13,7 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const { data: profile } = await supabase
     .from("users")
     .select(
-      "id, full_name, email, role, company:companies(id, name, assistant_name, brand_accent, assistant_color, assistant_icon, welcome_message, logo_url)"
+      "id, full_name, email, role, company:companies(id, name, assistant_name, brand_accent, assistant_color, assistant_icon, welcome_message, logo_url, mascot_enabled, mascot_head_shape, mascot_antenna, mascot_ears, mascot_bg)"
     )
     .eq("id", user.id)
     .single();
@@ -21,17 +21,25 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!profile?.company) redirect("/onboarding");
 
   const company = profile.company as any;
+  const assistantColor = company.assistant_color ?? company.brand_accent ?? "#1a6eff";
 
   const branding: Branding = {
     companyId: company.id,
     companyName: company.name,
     assistantName: company.assistant_name ?? "Оффи",
     accentColor: company.brand_accent ?? "#1a6eff",
-    assistantColor: company.assistant_color ?? company.brand_accent ?? "#1a6eff",
+    assistantColor,
     assistantIcon: company.assistant_icon ?? "sparkles",
     welcomeMessage: company.welcome_message ?? "",
     logoUrl: company.logo_url ?? null,
     role: (profile.role ?? "member") as Branding["role"],
+    mascot: {
+      enabled: company.mascot_enabled ?? true,
+      headShape: (company.mascot_head_shape ?? "classic") as Branding["mascot"]["headShape"],
+      antenna: (company.mascot_antenna ?? "ball") as Branding["mascot"]["antenna"],
+      ears: (company.mascot_ears ?? "round") as Branding["mascot"]["ears"],
+      bg: company.mascot_bg ?? "#EEF4FF",
+    },
   };
 
   return (

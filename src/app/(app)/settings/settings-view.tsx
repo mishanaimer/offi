@@ -6,11 +6,23 @@ import { createClient } from "@/lib/supabase/client";
 import { Input, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { AssistantAvatar } from "@/components/assistant-avatar";
+import { MascotAvatar } from "@/components/mascot";
+import {
+  HEAD_SHAPES,
+  ANTENNA_STYLES,
+  EAR_STYLES,
+  HEAD_SHAPE_LABELS,
+  ANTENNA_LABELS,
+  EAR_LABELS,
+  type HeadShape,
+  type AntennaStyle,
+  type EarStyle,
+} from "@/components/mascot";
 import { SettingsTabs } from "@/components/settings-tabs";
 import { IntegrationsPanel } from "@/components/integrations-panel";
 import { suggestAssistantName } from "@/lib/assistant-name";
-import { Upload, Lock } from "lucide-react";
+import { tintFromHex } from "@/lib/mascot/generate";
+import { Upload, Lock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Company = {
@@ -23,6 +35,11 @@ type Company = {
   welcome_message: string | null;
   logo_url: string | null;
   plan: string;
+  mascot_enabled?: boolean | null;
+  mascot_head_shape?: string | null;
+  mascot_antenna?: string | null;
+  mascot_ears?: string | null;
+  mascot_bg?: string | null;
 };
 type Integration = { id: string; type: string; enabled: boolean; config: any };
 
@@ -37,12 +54,14 @@ const PRESETS = [
   "#0EA5E9", // sky
 ];
 
-const ICONS: { key: string; label: string }[] = [
-  { key: "sparkles", label: "Искры" },
-  { key: "bot", label: "Бот" },
-  { key: "zap", label: "Молния" },
-  { key: "star", label: "Звезда" },
-  { key: "flame", label: "Огонь" },
+const BG_PRESETS = [
+  "#EEF4FF",
+  "#ECFDF5",
+  "#FFFAEB",
+  "#F5F0FF",
+  "#FFF0F0",
+  "#ECFEFF",
+  "#F8FAFC",
 ];
 
 export function SettingsView({
@@ -67,6 +86,18 @@ export function SettingsView({
   const [welcomeMessage, setWelcomeMessage] = useState(
     company.welcome_message ?? `Привет! Я ${company.assistant_name}. Спросите что-нибудь.`
   );
+  const [mascotHead, setMascotHead] = useState<HeadShape>(
+    (company.mascot_head_shape as HeadShape) ?? "classic"
+  );
+  const [mascotAntenna, setMascotAntenna] = useState<AntennaStyle>(
+    (company.mascot_antenna as AntennaStyle) ?? "ball"
+  );
+  const [mascotEars, setMascotEars] = useState<EarStyle>(
+    (company.mascot_ears as EarStyle) ?? "round"
+  );
+  const [mascotBg, setMascotBg] = useState<string>(
+    company.mascot_bg ?? tintFromHex(company.assistant_color ?? company.brand_accent ?? "#1a6eff")
+  );
   const [logoUrl, setLogoUrl] = useState<string | null>(company.logo_url);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -90,6 +121,10 @@ export function SettingsView({
         assistant_icon: assistantIcon,
         welcome_message: welcomeMessage,
         logo_url: logoUrl,
+        mascot_head_shape: mascotHead,
+        mascot_antenna: mascotAntenna,
+        mascot_ears: mascotEars,
+        mascot_bg: mascotBg,
       })
       .eq("id", company.id);
     setSaving(false);
@@ -250,11 +285,35 @@ export function SettingsView({
 
             {/* Assistant */}
             <div className="rounded-2xl border border-border p-4 space-y-4">
-              <div className="flex items-center gap-3">
-                <AssistantAvatar icon={assistantIcon} color={assistantColor} size={40} />
+              <div
+                className="rounded-2xl p-5 flex items-center gap-4 transition"
+                style={{ background: mascotBg }}
+              >
+                <MascotAvatar
+                  size={84}
+                  animated
+                  listenOneshots={false}
+                  override={{
+                    color: assistantColor,
+                    bg: mascotBg,
+                    headShape: mascotHead,
+                    antenna: mascotAntenna,
+                    ears: mascotEars,
+                  }}
+                />
                 <div>
-                  <div className="text-sm font-medium">{assistantName || "Ассистент"}</div>
-                  <div className="text-xs text-muted-foreground">Предпросмотр</div>
+                  <div
+                    className="text-[10px] tracking-[0.15em] uppercase font-semibold opacity-60"
+                    style={{ color: assistantColor }}
+                  >
+                    {name || "Бренд"}
+                  </div>
+                  <div className="text-[22px] font-bold leading-tight" style={{ color: assistantColor }}>
+                    {assistantName || "Ассистент"}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    Живой маскот вашего бренда
+                  </div>
                 </div>
               </div>
 
@@ -279,12 +338,18 @@ export function SettingsView({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>Цвет аватарки</Label>
+                  <Label>Цвет маскота</Label>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={assistantColor}
-                      onChange={(e) => setAssistantColor(e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setAssistantColor(v);
+                        if (mascotBg.toLowerCase() === tintFromHex(assistantColor).toLowerCase()) {
+                          setMascotBg(tintFromHex(v));
+                        }
+                      }}
                       disabled={!isAdmin}
                       className="w-10 h-10 rounded-lg border border-border cursor-pointer"
                     />
@@ -298,26 +363,77 @@ export function SettingsView({
                 </div>
               </div>
 
+              <MascotChipRow
+                label="Форма головы"
+                items={HEAD_SHAPES}
+                labels={HEAD_SHAPE_LABELS}
+                value={mascotHead}
+                onChange={setMascotHead}
+                disabled={!isAdmin}
+                accent={assistantColor}
+              />
+              <MascotChipRow
+                label="Антенна"
+                items={ANTENNA_STYLES}
+                labels={ANTENNA_LABELS}
+                value={mascotAntenna}
+                onChange={setMascotAntenna}
+                disabled={!isAdmin}
+                accent={assistantColor}
+              />
+              <MascotChipRow
+                label="Уши"
+                items={EAR_STYLES}
+                labels={EAR_LABELS}
+                value={mascotEars}
+                onChange={setMascotEars}
+                disabled={!isAdmin}
+                accent={assistantColor}
+              />
+
               <div className="space-y-1.5">
-                <Label>Иконка ассистента</Label>
-                <div className="flex flex-wrap gap-2">
-                  {ICONS.map((i) => (
+                <Label>Фон маскота</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {BG_PRESETS.map((c) => (
                     <button
-                      key={i.key}
+                      key={c}
                       type="button"
                       disabled={!isAdmin}
-                      onClick={() => setAssistantIcon(i.key)}
+                      onClick={() => setMascotBg(c)}
                       className={cn(
-                        "flex items-center gap-2 rounded-xl border px-3 h-10 text-sm transition",
-                        assistantIcon === i.key
+                        "w-8 h-8 rounded-full border-2 transition",
+                        mascotBg.toLowerCase() === c.toLowerCase()
                           ? "border-foreground"
-                          : "border-border hover:bg-muted"
+                          : "border-border"
                       )}
-                    >
-                      <AssistantAvatar icon={i.key} color={assistantColor} size={22} />
-                      {i.label}
-                    </button>
+                      style={{ background: c }}
+                      aria-label={c}
+                    />
                   ))}
+                  <input
+                    type="color"
+                    value={mascotBg}
+                    onChange={(e) => setMascotBg(e.target.value)}
+                    disabled={!isAdmin}
+                    className="w-8 h-8 rounded-full border border-border cursor-pointer"
+                  />
+                  <Input
+                    value={mascotBg}
+                    onChange={(e) => setMascotBg(e.target.value)}
+                    disabled={!isAdmin}
+                    className="flex-1 min-w-[120px]"
+                  />
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setMascotBg(tintFromHex(assistantColor))}
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-3 h-8 text-xs hover:bg-muted transition"
+                      title="Собрать фон из цвета маскота"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Авто
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -353,6 +469,52 @@ export function SettingsView({
         {/* integrations */}
         <IntegrationsPanel initialIntegrations={integrations} canEdit={isAdmin} />
 
+      </div>
+    </div>
+  );
+}
+
+function MascotChipRow<T extends string>({
+  label,
+  items,
+  labels,
+  value,
+  onChange,
+  disabled,
+  accent,
+}: {
+  label: string;
+  items: readonly T[];
+  labels: Record<T, string>;
+  value: T;
+  onChange: (v: T) => void;
+  disabled?: boolean;
+  accent: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex flex-wrap gap-2">
+        {items.map((it) => {
+          const active = value === it;
+          return (
+            <button
+              key={it}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(it)}
+              className={cn(
+                "inline-flex items-center rounded-full border px-3.5 h-9 text-[13px] font-medium transition",
+                active
+                  ? "border-transparent text-white"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+              style={active ? { background: accent } : undefined}
+            >
+              {labels[it]}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { generateMascotConfig } from "@/lib/mascot/generate";
 
 export const runtime = "nodejs";
 
@@ -36,12 +37,24 @@ export async function POST(req: NextRequest) {
     return Response.json({ ok: true, companyId: existing.company_id, existed: true });
   }
 
+  const accent = body.brandAccent ?? "#0259DD";
+  const mascot = generateMascotConfig({
+    companyName: body.companyName.trim(),
+    accentColor: accent,
+  });
+
   const { data: company, error: cErr } = await service
     .from("companies")
     .insert({
       name: body.companyName.trim(),
       assistant_name: body.assistantName.trim(),
-      brand_accent: body.brandAccent ?? "#0259DD",
+      brand_accent: accent,
+      assistant_color: accent,
+      mascot_enabled: true,
+      mascot_head_shape: mascot.headShape,
+      mascot_antenna: mascot.antenna,
+      mascot_ears: mascot.ears,
+      mascot_bg: mascot.bg,
     })
     .select()
     .single();

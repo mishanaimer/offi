@@ -16,7 +16,7 @@ import {
   Shield,
 } from "lucide-react";
 import { useBranding } from "@/components/branding-provider";
-import { AssistantAvatar } from "@/components/assistant-avatar";
+import { MascotAvatar } from "@/components/mascot";
 import { ApiErrorBanner } from "@/components/api-health";
 
 export type AppUser = { id: string; email: string; fullName: string; isSuperadmin?: boolean };
@@ -78,7 +78,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
 
           {/* assistant block */}
           <div className="mt-4 flex items-center gap-2.5 rounded-xl px-2.5 py-2 bg-muted/60">
-            <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={26} />
+            <MascotAvatar size={34} />
             <div className="min-w-0">
               <div className="text-[11px] text-muted-foreground leading-none">Ассистент</div>
               <div className="text-[13px] font-medium leading-tight truncate mt-0.5">{brand.assistantName}</div>
