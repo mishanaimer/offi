@@ -5,16 +5,21 @@ export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const supabase = createClient();
-  const [{ data: company }, { data: members }, { data: integrations }] = await Promise.all([
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const [{ data: company }, { data: integrations }, { data: me }] = await Promise.all([
     supabase.from("companies").select("*").maybeSingle(),
-    supabase.from("users").select("id, email, full_name, role"),
     supabase.from("integrations").select("*"),
+    supabase.from("users").select("role").eq("id", user!.id).maybeSingle(),
   ]);
+
   return (
     <SettingsView
       company={company!}
-      members={members ?? []}
       integrations={integrations ?? []}
+      currentUserRole={(me?.role as any) ?? "member"}
     />
   );
 }

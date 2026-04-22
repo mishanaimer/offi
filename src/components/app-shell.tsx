@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Logo } from "@/components/logo";
 import { cn } from "@/lib/utils";
 import {
   MessageSquare,
@@ -14,10 +14,11 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useBranding } from "@/components/branding-provider";
+import { AssistantAvatar } from "@/components/assistant-avatar";
+import { ApiErrorBanner } from "@/components/api-health";
 
 export type AppUser = { id: string; email: string; fullName: string };
-export type AppCompany = { id: string; name: string; assistantName: string; brandAccent?: string };
 
 const NAV = [
   { href: "/chat", label: "Чат", icon: MessageSquare },
@@ -30,26 +31,10 @@ const NAV = [
 
 const MOBILE_NAV = NAV.slice(0, 5);
 
-export function AppShell({
-  children,
-  user,
-  company,
-}: {
-  children: React.ReactNode;
-  user: AppUser;
-  company: AppCompany;
-}) {
+export function AppShell({ children, user }: { children: React.ReactNode; user: AppUser }) {
   const pathname = usePathname();
   const router = useRouter();
-
-  // пробрасываем бренд-акцент компании в CSS-переменную (если кастомизирован)
-  useEffect(() => {
-    if (!company.brandAccent) return;
-    try {
-      const hsl = hexToHsl(company.brandAccent);
-      if (hsl) document.documentElement.style.setProperty("--accent-brand", hsl);
-    } catch {}
-  }, [company.brandAccent]);
+  const brand = useBranding();
 
   async function signOut() {
     const supabase = createClient();
@@ -58,23 +43,49 @@ export function AppShell({
     router.refresh();
   }
 
-  return (
-    <div className="min-h-dvh bg-background flex">
-      {/* Sidebar (desktop) */}
-      <aside className="hidden md:flex w-60 shrink-0 border-r border-border/60 flex-col">
-        <div className="h-16 flex items-center px-4">
-          <Logo />
-        </div>
+  const companyInitial = brand.companyName.trim()[0]?.toUpperCase() ?? "O";
 
-        <div className="px-3 pb-3">
-          <div className="rounded-xl bg-muted/60 px-3 py-2 text-xs">
-            <div className="text-muted-foreground">Компания</div>
-            <div className="font-medium truncate">{company.name}</div>
-            <div className="mt-0.5 text-muted-foreground">Ассистент: {company.assistantName}</div>
+  return (
+    <div className="h-dvh bg-background flex overflow-hidden">
+      {/* Sidebar (desktop) */}
+      <aside className="hidden md:flex w-64 shrink-0 border-r border-border/60 flex-col bg-card/40">
+        {/* header: company */}
+        <div className="px-4 pt-5 pb-4 border-b border-border/60">
+          <div className="flex items-center gap-3">
+            {brand.logoUrl ? (
+              <Image
+                src={brand.logoUrl}
+                alt={brand.companyName}
+                width={36}
+                height={36}
+                className="rounded-xl object-cover shrink-0"
+              />
+            ) : (
+              <span
+                className="w-9 h-9 rounded-xl grid place-items-center text-white text-[15px] font-semibold shrink-0"
+                style={{ background: brand.accentColor }}
+                aria-hidden
+              >
+                {companyInitial}
+              </span>
+            )}
+            <div className="min-w-0">
+              <div className="text-[15px] font-bold leading-tight truncate">{brand.companyName}</div>
+              <div className="text-[10px] tracking-wider uppercase text-[hsl(var(--text-tertiary))]">offi.ai</div>
+            </div>
+          </div>
+
+          {/* assistant block */}
+          <div className="mt-4 flex items-center gap-2.5 rounded-xl px-2.5 py-2 bg-muted/60">
+            <AssistantAvatar icon={brand.assistantIcon} color={brand.assistantColor} size={26} />
+            <div className="min-w-0">
+              <div className="text-[11px] text-muted-foreground leading-none">Ассистент</div>
+              <div className="text-[13px] font-medium leading-tight truncate mt-0.5">{brand.assistantName}</div>
+            </div>
           </div>
         </div>
 
-        <nav className="px-3 flex flex-col gap-1 flex-1">
+        <nav className="px-3 pt-3 flex flex-col gap-1 flex-1 overflow-y-auto">
           {NAV.map((item) => {
             const active = pathname.startsWith(item.href);
             return (
@@ -82,12 +93,18 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-xl px-3 h-10 text-sm text-muted-foreground transition",
-                  active && "bg-muted text-foreground font-medium",
-                  "hover:bg-muted hover:text-foreground"
+                  "flex items-center gap-2.5 rounded-xl px-3 h-10 text-sm transition",
+                  active
+                    ? "text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 )}
+                style={active ? { background: `color-mix(in srgb, ${brand.accentColor} 12%, transparent)` } : undefined}
               >
-                <item.icon className="w-4 h-4" /> {item.label}
+                <item.icon
+                  className="w-4 h-4"
+                  style={active ? { color: brand.accentColor } : undefined}
+                />{" "}
+                {item.label}
               </Link>
             );
           })}
@@ -95,27 +112,38 @@ export function AppShell({
 
         <div className="p-3 border-t border-border/60">
           <div className="flex items-center gap-2 px-2 py-1.5">
-            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary grid place-items-center text-xs font-medium">
+            <div
+              className="w-8 h-8 rounded-full grid place-items-center text-xs font-medium text-white shrink-0"
+              style={{ background: `color-mix(in srgb, ${brand.accentColor} 85%, #000 0%)` }}
+            >
               {initials(user.fullName || user.email)}
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium truncate">{user.fullName || "Вы"}</div>
               <div className="text-xs text-muted-foreground truncate">{user.email}</div>
             </div>
-            <button onClick={signOut} className="p-1.5 rounded-md hover:bg-muted" aria-label="Выйти">
+            <button
+              onClick={signOut}
+              className="p-1.5 rounded-md hover:bg-muted"
+              aria-label="Выйти"
+            >
               <LogOut className="w-4 h-4 text-muted-foreground" />
             </button>
           </div>
         </div>
       </aside>
 
-      {/* Контент */}
-      <main className="flex-1 flex flex-col min-h-dvh pb-[calc(env(safe-area-inset-bottom)+64px)] md:pb-0">
+      {/* main */}
+      <main className="flex-1 flex flex-col min-w-0 min-h-0 h-full pb-[calc(env(safe-area-inset-bottom)+64px)] md:pb-0">
+        <ApiErrorBanner />
         {children}
       </main>
 
       {/* Mobile tab bar */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-background/90 backdrop-blur border-t border-border safe-bottom">
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-background/95 backdrop-blur border-t border-border"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
         <div className="grid grid-cols-5 h-16">
           {MOBILE_NAV.map((item) => {
             const active = pathname.startsWith(item.href);
@@ -123,10 +151,8 @@ export function AppShell({
               <Link
                 key={item.href}
                 href={item.href}
-                className={cn(
-                  "flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground",
-                  active && "text-primary"
-                )}
+                className="flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground"
+                style={active ? { color: brand.accentColor } : undefined}
               >
                 <item.icon className="w-5 h-5" />
                 <span>{item.label}</span>
@@ -146,25 +172,4 @@ function initials(s: string) {
     .map((w) => w[0]?.toUpperCase())
     .slice(0, 2)
     .join("");
-}
-
-function hexToHsl(hex: string): string | null {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!m) return null;
-  let r = parseInt(m[1], 16) / 255;
-  let g = parseInt(m[2], 16) / 255;
-  let b = parseInt(m[3], 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h = 0, s = 0;
-  const l = (max + min) / 2;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r: h = ((g - b) / d + (g < b ? 6 : 0)) * 60; break;
-      case g: h = ((b - r) / d + 2) * 60; break;
-      case b: h = ((r - g) / d + 4) * 60; break;
-    }
-  }
-  return `${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
 }

@@ -1,19 +1,28 @@
 import { createClient } from "@/lib/supabase/server";
 import { ChatView } from "./chat-view";
+import { currentPeriod, getPlan } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
 export default async function ChatPage() {
   const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
 
-  const { data: channel } = await supabase
-    .from("channels")
-    .select("*")
-    .eq("type", "ai")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const [channelRes, companyRes, usageRes] = await Promise.all([
+    supabase
+      .from("channels")
+      .select("*")
+      .eq("type", "ai")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    supabase.from("companies").select("plan").maybeSingle(),
+    supabase
+      .from("usage_counters")
+      .select("requests_count")
+      .eq("period", currentPeriod())
+      .maybeSingle(),
+  ]);
+  const channel = channelRes.data;
 
   const { data: messages } = channel
     ? await supabase
@@ -24,18 +33,14 @@ export default async function ChatPage() {
         .limit(100)
     : { data: [] };
 
-  const { data: profile } = await supabase
-    .from("users")
-    .select("company:companies(assistant_name, name)")
-    .eq("id", user!.id)
-    .single();
+  const plan = getPlan(companyRes.data?.plan);
+  const used = usageRes.data?.requests_count ?? 0;
 
   return (
     <ChatView
       channelId={channel?.id ?? null}
       initialMessages={messages ?? []}
-      assistantName={(profile?.company as any)?.assistant_name ?? "Оффи"}
-      companyName={(profile?.company as any)?.name ?? ""}
+      quota={{ used, limit: plan.limits.requests, planName: plan.name }}
     />
   );
 }

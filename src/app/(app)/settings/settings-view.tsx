@@ -1,151 +1,358 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Input } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Check, Mail, MessageCircle, Briefcase, Zap } from "lucide-react";
+import { AssistantAvatar } from "@/components/assistant-avatar";
+import { SettingsTabs } from "@/components/settings-tabs";
+import { IntegrationsPanel } from "@/components/integrations-panel";
+import { suggestAssistantName } from "@/lib/assistant-name";
+import { Upload, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Company = { id: string; name: string; assistant_name: string; brand_accent: string | null; plan: string };
-type Member = { id: string; email: string; full_name: string | null; role: string };
+type Company = {
+  id: string;
+  name: string;
+  assistant_name: string;
+  brand_accent: string | null;
+  assistant_color: string | null;
+  assistant_icon: string | null;
+  welcome_message: string | null;
+  logo_url: string | null;
+  plan: string;
+};
 type Integration = { id: string; type: string; enabled: boolean; config: any };
 
-const INTEGRATION_META: Record<string, { label: string; icon: any; hint: string }> = {
-  email: { label: "Email (Postmark)", icon: Mail, hint: "Отправка писем клиентам от имени сотрудника" },
-  telegram: { label: "Telegram", icon: MessageCircle, hint: "Бот для сообщений и уведомлений" },
-  amocrm: { label: "AmoCRM", icon: Briefcase, hint: "Синхронизация сделок и контактов" },
-  bitrix24: { label: "Bitrix24", icon: Briefcase, hint: "Синхронизация сделок и контактов" },
-  google_calendar: { label: "Google Calendar", icon: Zap, hint: "Создание и просмотр встреч" },
-};
+const PRESETS = [
+  "#1a6eff", // Offi blue
+  "#0259DD",
+  "#00A082", // mint
+  "#7C3AED", // violet
+  "#E11D48", // rose
+  "#F59E0B", // amber
+  "#111827", // graphite
+  "#0EA5E9", // sky
+];
 
-export function SettingsView({ company, members, integrations }: { company: Company; members: Member[]; integrations: Integration[] }) {
+const ICONS: { key: string; label: string }[] = [
+  { key: "sparkles", label: "Искры" },
+  { key: "bot", label: "Бот" },
+  { key: "zap", label: "Молния" },
+  { key: "star", label: "Звезда" },
+  { key: "flame", label: "Огонь" },
+];
+
+export function SettingsView({
+  company,
+  integrations,
+  currentUserRole,
+}: {
+  company: Company;
+  integrations: Integration[];
+  currentUserRole: "owner" | "admin" | "member";
+}) {
   const router = useRouter();
+  const isAdmin = currentUserRole === "owner" || currentUserRole === "admin";
+
   const [name, setName] = useState(company.name);
   const [assistantName, setAssistantName] = useState(company.assistant_name);
   const [accent, setAccent] = useState(company.brand_accent ?? "#1a6eff");
+  const [assistantColor, setAssistantColor] = useState(
+    company.assistant_color ?? company.brand_accent ?? "#1a6eff"
+  );
+  const [assistantIcon, setAssistantIcon] = useState(company.assistant_icon ?? "sparkles");
+  const [welcomeMessage, setWelcomeMessage] = useState(
+    company.welcome_message ?? `Привет! Я ${company.assistant_name}. Спросите что-нибудь.`
+  );
+  const [logoUrl, setLogoUrl] = useState<string | null>(company.logo_url);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const suggestedAssistant = useMemo(() => suggestAssistantName(name), [name]);
 
   async function save() {
+    if (!isAdmin) return;
     setSaving(true);
+    setErr(null);
     const supabase = createClient();
-    await supabase.from("companies").update({ name, assistant_name: assistantName, brand_accent: accent }).eq("id", company.id);
+    const { error } = await supabase
+      .from("companies")
+      .update({
+        name,
+        assistant_name: assistantName,
+        brand_accent: accent,
+        assistant_color: assistantColor,
+        assistant_icon: assistantIcon,
+        welcome_message: welcomeMessage,
+        logo_url: logoUrl,
+      })
+      .eq("id", company.id);
     setSaving(false);
-    router.refresh();
-  }
-
-  const integrationsMap = new Map(integrations.map((i) => [i.type, i]));
-
-  async function toggleIntegration(type: string, enabled: boolean) {
-    const supabase = createClient();
-    const existing = integrationsMap.get(type);
-    if (existing) {
-      await supabase.from("integrations").update({ enabled }).eq("id", existing.id);
-    } else {
-      await supabase.from("integrations").insert({ type, enabled, config: {} });
+    if (error) {
+      setErr(error.message);
+      return;
     }
     router.refresh();
   }
 
+  async function uploadLogo(file: File) {
+    if (!isAdmin) return;
+    setUploading(true);
+    setErr(null);
+    try {
+      const supabase = createClient();
+      const ext = (file.name.split(".").pop() ?? "png").toLowerCase();
+      const path = `logos/${company.id}.${ext}`;
+      const { error } = await supabase.storage
+        .from("avatars")
+        .upload(path, file, { upsert: true, cacheControl: "3600" });
+      if (error) throw error;
+      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+      const url = `${data.publicUrl}?v=${Date.now()}`;
+      setLogoUrl(url);
+    } catch (e: any) {
+      setErr(e.message ?? "Не удалось загрузить логотип");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      <header className="h-16 glass border-b border-border/60 px-4 md:px-6 flex items-center">
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <header
+        className="h-16 sticky top-0 z-10 glass border-b border-border/60 px-4 md:px-6 flex items-center"
+        style={{ backdropFilter: "saturate(180%) blur(20px)" }}
+      >
         <h1 className="text-lg font-semibold">Настройки</h1>
+        {!isAdmin && (
+          <span className="ml-3 inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="w-3.5 h-3.5" /> только просмотр
+          </span>
+        )}
       </header>
+      <SettingsTabs />
 
       <div className="container-page max-w-3xl py-6 md:py-10 space-y-6">
-        {/* company */}
+        {/* Brand */}
         <section className="card-surface p-6">
-          <h2 className="font-semibold">Компания и ассистент</h2>
-          <p className="text-sm text-muted-foreground">Имя ассистента видят сотрудники в чате и на лендинге.</p>
-          <div className="mt-5 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-base">Бренд</h2>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Цвета, имя ассистента и логотип, которые видят сотрудники в приложении.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 space-y-5">
+            {/* Company name */}
             <div className="space-y-1.5">
               <Label>Название компании</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={!isAdmin}
+              />
             </div>
+
+            {/* Logo */}
             <div className="space-y-1.5">
-              <Label>Имя ассистента</Label>
-              <Input value={assistantName} onChange={(e) => setAssistantName(e.target.value)} />
+              <Label>Логотип</Label>
+              <div className="flex items-center gap-3">
+                {logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={logoUrl}
+                    alt="logo"
+                    className="w-14 h-14 rounded-xl object-cover border border-border"
+                  />
+                ) : (
+                  <span
+                    className="w-14 h-14 rounded-xl grid place-items-center text-white text-xl font-semibold"
+                    style={{ background: accent }}
+                  >
+                    {(name.trim()[0] ?? "O").toUpperCase()}
+                  </span>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) uploadLogo(f);
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={!isAdmin || uploading}
+                  >
+                    <Upload className="w-4 h-4 mr-1" />
+                    {uploading ? "Загружаем…" : "Загрузить"}
+                  </Button>
+                  {logoUrl && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => setLogoUrl(null)}
+                      disabled={!isAdmin}
+                    >
+                      Убрать
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">PNG/SVG, квадрат, до 1 МБ.</p>
             </div>
+
+            {/* Accent */}
             <div className="space-y-1.5">
-              <Label>Акцент бренда</Label>
-              <div className="flex items-center gap-2">
-                <input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} className="w-11 h-11 rounded-xl border border-border cursor-pointer" />
-                <Input value={accent} onChange={(e) => setAccent(e.target.value)} className="flex-1" />
+              <Label>Акцентный цвет</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                {PRESETS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    disabled={!isAdmin}
+                    onClick={() => setAccent(c)}
+                    className={cn(
+                      "w-8 h-8 rounded-full border-2 transition",
+                      accent.toLowerCase() === c.toLowerCase()
+                        ? "border-foreground"
+                        : "border-transparent"
+                    )}
+                    style={{ background: c }}
+                    aria-label={c}
+                  />
+                ))}
+                <input
+                  type="color"
+                  value={accent}
+                  onChange={(e) => setAccent(e.target.value)}
+                  disabled={!isAdmin}
+                  className="w-8 h-8 rounded-full border border-border cursor-pointer"
+                />
+                <Input
+                  value={accent}
+                  onChange={(e) => setAccent(e.target.value)}
+                  disabled={!isAdmin}
+                  className="flex-1 min-w-[120px]"
+                />
               </div>
             </div>
-            <div className="flex justify-end">
-              <Button onClick={save} disabled={saving}>{saving ? "Сохраняем…" : "Сохранить"}</Button>
+
+            {/* Assistant */}
+            <div className="rounded-2xl border border-border p-4 space-y-4">
+              <div className="flex items-center gap-3">
+                <AssistantAvatar icon={assistantIcon} color={assistantColor} size={40} />
+                <div>
+                  <div className="text-sm font-medium">{assistantName || "Ассистент"}</div>
+                  <div className="text-xs text-muted-foreground">Предпросмотр</div>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Имя ассистента</Label>
+                  <Input
+                    value={assistantName}
+                    onChange={(e) => setAssistantName(e.target.value)}
+                    placeholder={suggestedAssistant}
+                    disabled={!isAdmin}
+                  />
+                  {isAdmin && suggestedAssistant !== assistantName && (
+                    <button
+                      type="button"
+                      onClick={() => setAssistantName(suggestedAssistant)}
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                    >
+                      Использовать «{suggestedAssistant}»
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Цвет аватарки</Label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={assistantColor}
+                      onChange={(e) => setAssistantColor(e.target.value)}
+                      disabled={!isAdmin}
+                      className="w-10 h-10 rounded-lg border border-border cursor-pointer"
+                    />
+                    <Input
+                      value={assistantColor}
+                      onChange={(e) => setAssistantColor(e.target.value)}
+                      disabled={!isAdmin}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Иконка ассистента</Label>
+                <div className="flex flex-wrap gap-2">
+                  {ICONS.map((i) => (
+                    <button
+                      key={i.key}
+                      type="button"
+                      disabled={!isAdmin}
+                      onClick={() => setAssistantIcon(i.key)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-xl border px-3 h-10 text-sm transition",
+                        assistantIcon === i.key
+                          ? "border-foreground"
+                          : "border-border hover:bg-muted"
+                      )}
+                    >
+                      <AssistantAvatar icon={i.key} color={assistantColor} size={22} />
+                      {i.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Приветственное сообщение</Label>
+                <Textarea
+                  value={welcomeMessage}
+                  onChange={(e) => setWelcomeMessage(e.target.value)}
+                  rows={3}
+                  className="min-h-[84px]"
+                  disabled={!isAdmin}
+                />
+              </div>
+
+              {/* Слот под будущий мастер создания ассистента */}
+              <div className="rounded-xl border border-dashed border-border/80 p-3 text-xs text-muted-foreground">
+                Скоро: мастер создания ассистента — описание роли, стиль ответов, тон общения.
+              </div>
             </div>
+
+            {err && <p className="text-sm text-destructive">{err}</p>}
+
+            {isAdmin && (
+              <div className="flex justify-end">
+                <Button onClick={save} disabled={saving}>
+                  {saving ? "Сохраняем…" : "Сохранить"}
+                </Button>
+              </div>
+            )}
           </div>
         </section>
 
         {/* integrations */}
-        <section className="card-surface p-6">
-          <h2 className="font-semibold">Интеграции</h2>
-          <p className="text-sm text-muted-foreground">Подключите каналы коммуникации и CRM.</p>
-          <div className="mt-4 space-y-2">
-            {Object.entries(INTEGRATION_META).map(([type, meta]) => {
-              const I = integrationsMap.get(type);
-              const enabled = !!I?.enabled;
-              return (
-                <div key={type} className="flex items-center gap-3 p-3 rounded-xl border border-border">
-                  <div className="w-9 h-9 rounded-lg bg-muted grid place-items-center">
-                    <meta.icon className="w-4 h-4 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium">{meta.label}</div>
-                    <div className="text-xs text-muted-foreground">{meta.hint}</div>
-                  </div>
-                  <button
-                    onClick={() => toggleIntegration(type, !enabled)}
-                    className={cn("h-6 w-11 rounded-full transition relative", enabled ? "bg-primary" : "bg-muted")}
-                    aria-label="toggle"
-                  >
-                    <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition", enabled ? "left-5" : "left-0.5")} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+        <IntegrationsPanel initialIntegrations={integrations} canEdit={isAdmin} />
 
-        {/* members */}
-        <section className="card-surface p-6">
-          <h2 className="font-semibold">Сотрудники ({members.length})</h2>
-          <div className="mt-4 divide-y divide-border">
-            {members.map((m) => (
-              <div key={m.id} className="flex items-center gap-3 py-3">
-                <div className="w-9 h-9 rounded-full bg-primary/10 text-primary grid place-items-center text-xs font-medium">
-                  {(m.full_name ?? m.email)[0]?.toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">{m.full_name ?? m.email}</div>
-                  <div className="text-xs text-muted-foreground">{m.email}</div>
-                </div>
-                <span className="text-xs text-muted-foreground">{m.role}</span>
-                {m.role === "owner" && <Check className="w-4 h-4 text-primary" />}
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Приглашение сотрудников появится в ближайшем обновлении.
-          </p>
-        </section>
-
-        {/* plan */}
-        <section className="card-surface p-6">
-          <h2 className="font-semibold">Тариф</h2>
-          <div className="mt-3 flex items-center justify-between">
-            <div>
-              <div className="text-sm">Текущий: <span className="font-medium capitalize">{company.plan}</span></div>
-              <div className="text-xs text-muted-foreground">Обновление тарифов и биллинг — на этапе пилота по запросу.</div>
-            </div>
-            <a href="mailto:hello@offi.ai"><Button variant="outline">Сменить</Button></a>
-          </div>
-        </section>
       </div>
     </div>
   );

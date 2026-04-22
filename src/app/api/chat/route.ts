@@ -3,12 +3,15 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { chatCompletionStream, classify, MODELS, type ChatMessage } from "@/lib/ai";
 import { embed } from "@/lib/embeddings";
 import { truncate } from "@/lib/utils";
+import { scheduleFactExtraction } from "@/lib/memory";
+import { currentPeriod, getPlan } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SYSTEM_PROMPT = (assistantName: string, companyName: string) => `Ты — ${assistantName}, AI-ассистент компании «${companyName}».
-Отвечай точно, кратко, по-русски. Когда опираешься на контекст из базы знаний — упоминай это естественно.
+const SYSTEM_PROMPT = (assistantName: string, companyName: string) =>
+  `Ты — ${assistantName}, AI-ассистент компании «${companyName}».
+Отвечай точно, кратко, по-русски. Когда опираешься на контекст из базы знаний или памяти — упоминай это естественно.
 Если контекста не хватает — честно скажи «в документах этого нет, могу поискать общий ответ».
 Не выдумывай цифр и фактов.`;
 
@@ -28,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   const { data: profile } = await supabase
     .from("users")
-    .select("company:companies(id, name, assistant_name)")
+    .select("company:companies(id, name, assistant_name, plan)")
     .eq("id", user.id)
     .single();
   const company = profile?.company as any;
@@ -36,28 +39,77 @@ export async function POST(req: NextRequest) {
 
   const service = createServiceClient();
 
-  // --- Router: определяем тип запроса (question/action/smalltalk) ---
+  // --- Лимит запросов по тарифу ---
+  const period = currentPeriod();
+  const plan = getPlan(company.plan);
+  const { data: usage } = await service
+    .from("usage_counters")
+    .select("requests_count")
+    .eq("company_id", company.id)
+    .eq("period", period)
+    .maybeSingle();
+  const used = usage?.requests_count ?? 0;
+  if (used >= plan.limits.requests) {
+    return Response.json(
+      {
+        error: "limit_exceeded",
+        detail: `Исчерпан лимит AI-запросов на месяц (${plan.limits.requests}) по тарифу «${plan.name}».`,
+        hint: "Перейдите на тариф выше в Настройки → Тарифы.",
+      },
+      { status: 402 }
+    );
+  }
+
+  // --- Router: определяем тип запроса ---
   let type: "question" | "action" | "smalltalk" = "question";
   try {
     const cls = await classify(message);
     type = cls.type;
   } catch {}
 
-  // --- RAG: для вопросов подтягиваем релевантные чанки ---
+  // --- Dual RAG: chunks + memories ---
   let context = "";
-  let sources: Array<{ document_id: string; snippet: string }> = [];
-  if (type === "question") {
+  let sources: Array<{ document_id: string; snippet: string; name?: string }> = [];
+  let memorySources: Array<{ id: string; content: string }> = [];
+
+  if (type !== "smalltalk") {
     try {
       const vec = await embed(message);
-      const { data: matches } = await service.rpc("match_chunks", {
-        query_embedding: vec,
-        p_company_id: company.id,
-        match_count: 5,
-      });
-      if (Array.isArray(matches)) {
-        sources = matches.map((m: any) => ({ document_id: m.document_id, snippet: truncate(m.content, 220) }));
-        context = matches.map((m: any, i: number) => `[${i + 1}] ${m.content}`).join("\n\n");
+
+      const [{ data: matches }, { data: memMatches }] = await Promise.all([
+        service.rpc("match_chunks", {
+          query_embedding: vec,
+          p_company_id: company.id,
+          match_count: 3,
+        }),
+        service.rpc("match_memories", {
+          query_embedding: vec,
+          p_company_id: company.id,
+          match_count: 3,
+        }),
+      ]);
+
+      if (Array.isArray(matches) && matches.length) {
+        sources = matches.map((m: any) => ({
+          document_id: m.document_id,
+          snippet: truncate(m.content, 220),
+        }));
       }
+      if (Array.isArray(memMatches) && memMatches.length) {
+        memorySources = memMatches.map((m: any) => ({
+          id: m.id,
+          content: truncate(m.content, 220),
+        }));
+      }
+
+      const chunkCtx = (matches ?? [])
+        .map((m: any, i: number) => `[Документ ${i + 1}] ${m.content}`)
+        .join("\n\n");
+      const memCtx = (memMatches ?? [])
+        .map((m: any, i: number) => `[Память ${i + 1}] ${m.content}`)
+        .join("\n\n");
+
+      context = [chunkCtx, memCtx].filter(Boolean).join("\n\n");
     } catch (e) {
       console.error("RAG error", e);
     }
@@ -69,23 +121,43 @@ export async function POST(req: NextRequest) {
       role: "system",
       content:
         systemPrompt +
-        (context ? `\n\nКонтекст из базы знаний компании:\n${context}` : ""),
+        (context ? `\n\nКонтекст компании:\n${context}` : ""),
     },
     ...history.slice(-8).map((h) => ({ role: h.role, content: h.content }) as ChatMessage),
     { role: "user", content: message },
   ];
 
-  // --- сохраняем сообщение пользователя ---
+  // --- сохраняем сообщение пользователя + инкремент счётчика ---
+  let savedUserMsgId: string | null = null;
   if (channelId) {
-    await service.from("messages").insert({
-      channel_id: channelId,
-      user_id: user.id,
-      content: message,
-      is_ai: false,
-    });
+    const { data: inserted } = await service
+      .from("messages")
+      .insert({
+        channel_id: channelId,
+        user_id: user.id,
+        content: message,
+        is_ai: false,
+      })
+      .select("id")
+      .single();
+    savedUserMsgId = inserted?.id ?? null;
   }
 
-  // --- streaming ответ ---
+  await service.rpc("increment_usage", {
+    p_company_id: company.id,
+    p_period: period,
+    p_requests: 1,
+    p_actions: 0,
+  });
+
+  // --- фоновая экстракция фактов (не блокирует стрим) ---
+  scheduleFactExtraction(message, {
+    companyId: company.id,
+    userId: user.id,
+    sourceId: savedUserMsgId,
+  });
+
+  // --- streaming ответа ---
   let upstream: ReadableStream<Uint8Array>;
   try {
     upstream = await chatCompletionStream(messages, { model: MODELS.main });
@@ -93,7 +165,11 @@ export async function POST(req: NextRequest) {
     const msg = (e as Error).message ?? "unknown";
     console.error("RouterAI stream error:", msg);
     return Response.json(
-      { error: "routerai_failed", detail: msg, hint: "Проверь ROUTERAI_API_KEY, ROUTERAI_BASE_URL и ROUTERAI_MAIN_MODEL. Перезапусти dev-сервер после правки .env.local." },
+      {
+        error: "routerai_failed",
+        detail: msg,
+        hint: "Проверь ROUTERAI_API_KEY, ROUTERAI_BASE_URL и ROUTERAI_MAIN_MODEL. Перезапусти dev-сервер после правки .env.local.",
+      },
       { status: 502 }
     );
   }
@@ -101,9 +177,12 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
-      // emit sources first
-      if (sources.length) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "sources", sources })}\n\n`));
+      if (sources.length || memorySources.length) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "sources", sources, memories: memorySources })}\n\n`
+          )
+        );
       }
 
       const reader = upstream.getReader();
@@ -127,7 +206,9 @@ export async function POST(req: NextRequest) {
               const delta = json.choices?.[0]?.delta?.content ?? "";
               if (delta) {
                 full += delta;
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", text: delta })}\n\n`));
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ type: "delta", text: delta })}\n\n`)
+                );
               }
             } catch {}
           }
@@ -138,7 +219,6 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
         controller.close();
 
-        // сохраняем итоговое сообщение ассистента
         if (channelId && full) {
           await service.from("messages").insert({
             channel_id: channelId,
