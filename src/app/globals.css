@@ -139,6 +139,63 @@
 .anim-slide-right { animation: slide-right 0.5s var(--ease) both; }
 .anim-slide-left { animation: slide-left 0.5s var(--ease) both; }
 
+/* Mascot loader — spinner + float + label pulse */
+@keyframes mascot-loader-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes mascot-loader-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes mascot-loader-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* Showcase halo — органичное «дыхание» за маскотом */
+@keyframes halo-breathe {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.55; }
+  50% { transform: translate(-50%, -50%) scale(1.08); opacity: 0.75; }
+}
+
+/* Плавающие «пузырьки»-подсказки вокруг hero-маскота */
+@keyframes bubble-float {
+  0%, 100% { transform: translateY(0) rotate(var(--rot, 0deg)); }
+  50% { transform: translateY(-6px) rotate(var(--rot, 0deg)); }
+}
+
+/* Плавный «sheen» по градиенту (для бейджа) */
+@keyframes sheen {
+  0% { background-position: -200% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.anim-halo { animation: halo-breathe 5.5s ease-in-out infinite; }
+.anim-bubble-float { animation: bubble-float 4.5s ease-in-out infinite; }
+.anim-sheen {
+  background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.55) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: sheen 2.8s linear infinite;
+}
+
+/* Пластичный hover для «hero morph»-карточки */
+.showcase-plastic {
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.showcase-plastic:hover {
+  transform: translateY(-3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-halo, .anim-bubble-float, .anim-sheen,
+  .anim-fade-up, .anim-fade-in, .anim-scale-in,
+  .anim-slide-right, .anim-slide-left {
+    animation: none !important;
+  }
+}
+
 /* Scrollbar — 5px, borderless */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

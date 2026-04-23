@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { suggestAssistantName } from "@/lib/assistant-name";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Check, FileText, Globe, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { GuestMascot, MascotLoader, useMascotEmotions } from "@/components/mascot";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -21,13 +22,28 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
   const [knowledgeValue, setKnowledgeValue] = useState("");
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  const mascot = useMascotEmotions("idle");
 
   const suggestedName = useMemo(() => suggestAssistantName(companyName), [companyName]);
 
+  // Каждый шаг — своя микро-эмоция. Не агрессивно, а в тему контекста.
+  useEffect(() => {
+    if (step === 1) mascot.fire("wink");
+    if (step === 2) mascot.fire("love");
+    if (step === 3) mascot.fire("pensive");
+    if (step === 4) mascot.fire("joy");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  useEffect(() => {
+    if (err) mascot.fire("surprise");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [err]);
+
   async function finish() {
     setErr(null);
+    mascot.setState("working");
     try {
-      // 1) атомарно: создать компанию + связать пользователя + создать канал (на сервере)
       const res = await fetch("/api/onboarding/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -39,7 +55,6 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
       if (!res.ok) throw new Error(await res.text());
       const { companyId } = (await res.json()) as { companyId: string };
 
-      // 2) импорт начальной базы знаний (если указали)
       if (knowledgeMode !== "skip" && knowledgeValue.trim()) {
         await fetch("/api/ingest", {
           method: "POST",
@@ -52,30 +67,88 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
         });
       }
 
+      mascot.fire("joy");
       startTransition(() => {
         router.push("/chat");
         router.refresh();
       });
     } catch (e) {
+      mascot.setState("idle");
       setErr((e as Error).message);
     }
   }
 
+  // Во время финальной подготовки показываем полноэкранный лоадер с маскотом.
+  if (pending) {
+    return (
+      <div className="w-full max-w-xl flex flex-col items-center gap-6 animate-fade-in">
+        <MascotLoader
+          size={140}
+          state="working"
+          label="Готовим ваше рабочее место…"
+        />
+        <div className="text-center space-y-1 text-sm text-muted-foreground">
+          <div>Создаём компанию «{companyName}»</div>
+          <div>Настраиваем ассистента «{assistantName || suggestedName}»</div>
+          {knowledgeMode !== "skip" && knowledgeValue.trim() && (
+            <div>Учим ассистента на вашей базе знаний</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full max-w-xl animate-fade-in">
+      {/* Маскот над прогрессом — живёт вместе со всеми шагами */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="relative shrink-0">
+          <div
+            className="absolute inset-0 rounded-full anim-halo pointer-events-none"
+            style={{
+              background: "radial-gradient(closest-side, hsl(var(--accent-brand-light)), transparent 70%)",
+            }}
+            aria-hidden
+          />
+          <GuestMascot
+            size={72}
+            state={mascot.props.state}
+            oneshotId={mascot.props.oneshotId}
+            oneshotKey={mascot.props.oneshotKey}
+            animated
+          />
+        </div>
+        <div className="flex-1">
+          <div className="text-sm font-semibold tracking-[-0.01em]">
+            {step === 1 && "Шаг 1 из 4 — Знакомимся"}
+            {step === 2 && "Шаг 2 из 4 — Имя помощника"}
+            {step === 3 && "Шаг 3 из 4 — База знаний"}
+            {step === 4 && "Шаг 4 из 4 — Всё готово"}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {step === 1 && "Расскажите немного о компании."}
+            {step === 2 && "Можно переименовать ассистента или оставить наш вариант."}
+            {step === 3 && "Пара абзацев — и он уже знает бизнес."}
+            {step === 4 && "Подтвердите — и переходим в чат."}
+          </div>
+        </div>
+      </div>
+
       <Progress step={step} />
       <div className="mt-8 card-surface p-6 md:p-8">
         {step === 1 && (
           <Section
             title="Как называется ваша компания?"
-            hint={`Например: «ДентОпт», «АйСистемс». Это повлияет на имя ассистента. ${userEmail}`}
+            hint={`Например: «ДентОпт», «АйСистемс». Это повлияет на имя ассистента.`}
           >
             <Input
               autoFocus
               placeholder="Название компании"
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
+              onFocus={() => mascot.fire("pensive")}
             />
+            <p className="text-xs text-muted-foreground">Вошли как {userEmail}</p>
             <Next disabled={!companyName.trim()} onClick={() => { setAssistantName(suggestedName); setStep(2); }} />
           </Section>
         )}
@@ -86,9 +159,17 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
             hint={`Мы предложили «${suggestedName}» — можно оставить или изменить. По умолчанию «Оффи».`}
           >
             <div className="flex gap-2">
-              <Input value={assistantName} onChange={(e) => setAssistantName(e.target.value)} />
-              <Button variant="outline" onClick={() => setAssistantName(suggestedName)}>{suggestedName}</Button>
-              <Button variant="ghost" onClick={() => setAssistantName("Оффи")}>Оффи</Button>
+              <Input
+                value={assistantName}
+                onChange={(e) => setAssistantName(e.target.value)}
+                onFocus={() => mascot.fire("wink")}
+              />
+              <Button variant="outline" onClick={() => { setAssistantName(suggestedName); mascot.fire("love"); }}>
+                {suggestedName}
+              </Button>
+              <Button variant="ghost" onClick={() => { setAssistantName("Оффи"); mascot.fire("joy"); }}>
+                Оффи
+              </Button>
             </div>
             <Next onClick={() => setStep(3)} disabled={!assistantName.trim()} />
           </Section>
@@ -100,9 +181,9 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
             hint="Загрузку файлов можно сделать потом. Для быстрого старта — вставьте URL сайта или текст."
           >
             <div className="grid sm:grid-cols-3 gap-2">
-              <ModeButton icon={Globe} active={knowledgeMode === "url"} onClick={() => setKnowledgeMode("url")}>URL сайта</ModeButton>
-              <ModeButton icon={FileText} active={knowledgeMode === "text"} onClick={() => setKnowledgeMode("text")}>Свой текст</ModeButton>
-              <ModeButton icon={Sparkles} active={knowledgeMode === "skip"} onClick={() => setKnowledgeMode("skip")}>Пропустить</ModeButton>
+              <ModeButton icon={Globe} active={knowledgeMode === "url"} onClick={() => { setKnowledgeMode("url"); mascot.fire("surprise"); }}>URL сайта</ModeButton>
+              <ModeButton icon={FileText} active={knowledgeMode === "text"} onClick={() => { setKnowledgeMode("text"); mascot.fire("pensive"); }}>Свой текст</ModeButton>
+              <ModeButton icon={Sparkles} active={knowledgeMode === "skip"} onClick={() => { setKnowledgeMode("skip"); mascot.fire("sleepy"); }}>Пропустить</ModeButton>
             </div>
             {knowledgeMode === "url" && (
               <Input
@@ -140,12 +221,14 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
             <div className="mt-6 flex gap-3">
               <Button variant="outline" onClick={() => setStep(3)}>Назад</Button>
               <Button onClick={finish} disabled={pending} className="flex-1">
-                {pending ? "Готовим…" : "Начать пользоваться"}
+                Начать пользоваться
               </Button>
             </div>
           </Section>
         )}
       </div>
+      {/* userId используется upstream для аналитики; оставим как hidden-анкор. */}
+      <input type="hidden" value={userId} readOnly />
     </div>
   );
 }
@@ -157,9 +240,13 @@ function Progress({ step }: { step: Step }) {
         <div
           key={n}
           className={cn(
-            "h-1.5 flex-1 rounded-full bg-muted transition",
+            "h-1.5 flex-1 rounded-full bg-muted transition-all duration-500",
             step >= n && "bg-primary"
           )}
+          style={{
+            transform: step === n ? "scaleY(1.3)" : "scaleY(1)",
+            transformOrigin: "center",
+          }}
         />
       ))}
     </div>
