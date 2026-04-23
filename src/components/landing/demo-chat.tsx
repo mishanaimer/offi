@@ -1,21 +1,30 @@
 "use client";
 
-// DemoChat — живой пример работы Offi на лендинге. Автоплей: пользователь
-// «печатает» запрос → AI отвечает стримом → появляются шаги действия
-// (ищу клиента, генерирую документ…) → файл/письмо/отчёт → кнопка подтверждения.
-// Цель — за 10–15 секунд показать, что это не «чат с фактами», а агент,
-// который делает реальные дела.
+// DemoChat — интерактивный демо-чат Offi на лендинге. БЕЗ автоплея:
+// пользователь сам выбирает сценарий чипсом → AI стримит ответ с шагами,
+// карточкой результата и подтверждением. В хедере чата — живой Оффи,
+// который реагирует на состояние (idle → surprise при нажатии →
+// working во время стрима → joy после результата).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OffiMark } from "@/components/logo";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
-import { Check, FileText, Mail, CalendarDays, BarChart3, Search, Sparkles, Paperclip } from "lucide-react";
+import { GuestMascot, useMascotEmotions } from "@/components/mascot";
+import {
+  Check,
+  FileText,
+  Mail,
+  CalendarDays,
+  BarChart3,
+  Search,
+  Sparkles,
+  Paperclip,
+} from "lucide-react";
 
 type ActionStep = {
   icon: "search" | "doc" | "mail" | "cal" | "chart" | "spark";
   text: string;
   doneText?: string;
-  durMs: number; // сколько висит в «in-progress» перед ✅
+  durMs: number;
 };
 
 type ResultCard =
@@ -25,61 +34,61 @@ type ResultCard =
   | { kind: "stats"; items: { label: string; value: string; delta?: string }[] };
 
 type Scenario = {
-  query: string;          // что пользователь «пишет»
-  reply: string;          // стрим AI
-  sources?: string[];     // цитаты источников (под AI-бабблом)
-  steps: ActionStep[];    // шаги действия
+  chip: string;
+  query: string;
+  reply: string;
+  sources?: string[];
+  steps: ActionStep[];
   result?: ResultCard;
   confirm?: { primary: string; secondary: string; hint: string };
 };
 
 const SCENARIOS: Scenario[] = [
   {
+    chip: "📄 Подготовь договор",
     query: "Подготовь договор для ООО «Вектор»",
     reply: "Готовлю договор по шаблону «Услуги». Реквизиты беру из базы клиентов.",
     sources: ["база-клиентов.xlsx", "шаблон-договора-услуги.docx"],
     steps: [
-      { icon: "search", text: "Ищу клиента «ООО Вектор» в базе…", doneText: "Нашла: ООО «Вектор», ИНН 7701234567", durMs: 900 },
-      { icon: "doc", text: "Генерирую договор №48 по шаблону «Услуги»…", doneText: "Договор №48 готов", durMs: 1100 },
+      { icon: "search", text: "Ищу клиента «ООО Вектор»…", doneText: "Нашла: ООО «Вектор», ИНН 7701234567", durMs: 900 },
+      { icon: "doc", text: "Генерирую договор №48…", doneText: "Договор №48 готов", durMs: 1100 },
     ],
     result: { kind: "doc", name: "Договор №48.docx", size: "28 КБ", hint: "Сумма: 150 000 ₽ · Срок: 30 дней" },
-    confirm: { primary: "Отправить на подпись", secondary: "Открыть", hint: "отправит в СБИС от вашего имени" },
+    confirm: { primary: "Отправить на подпись", secondary: "Открыть", hint: "через СБИС" },
   },
   {
+    chip: "✉️ Напиши письмо",
     query: "Напиши письмо Иванову — перенести встречу на завтра",
-    reply: "Черновик готов. Тон — деловой, но тёплый. Можно отправить или подправить.",
-    steps: [
-      { icon: "mail", text: "Готовлю черновик письма…", doneText: "Письмо собрано", durMs: 1100 },
-    ],
+    reply: "Черновик готов. Тон — деловой, но тёплый.",
+    steps: [{ icon: "mail", text: "Готовлю черновик…", doneText: "Письмо собрано", durMs: 1000 }],
     result: {
       kind: "mail",
       to: "Иванов И.П. <ivanov@vector.ru>",
       subject: "Перенос встречи",
-      preview: "Добрый день, Иван Петрович! Предлагаю перенести нашу встречу на завтра, 11:00. Если удобно — подтвердите.",
+      preview:
+        "Добрый день, Иван Петрович! Предлагаю перенести нашу встречу на завтра, 11:00. Если удобно — подтвердите.",
     },
-    confirm: { primary: "Отправить", secondary: "Изменить", hint: "отправится через ваш корпоративный ящик" },
+    confirm: { primary: "Отправить", secondary: "Изменить", hint: "через ваш ящик" },
   },
   {
+    chip: "📅 Назначь встречу",
     query: "Назначь встречу с Петровой на этой неделе",
     reply: "Нашла свободный слот у вас обоих — пятница, 14:00. Длительность — 30 минут.",
-    steps: [
-      { icon: "cal", text: "Синхронизирую календари…", doneText: "Окно найдено", durMs: 1000 },
-    ],
+    steps: [{ icon: "cal", text: "Синхронизирую календари…", doneText: "Окно найдено", durMs: 950 }],
     result: {
       kind: "meeting",
       title: "Встреча с Петровой",
       when: "Пт, 14:00 — 14:30",
       people: ["Вы", "Петрова М.С."],
     },
-    confirm: { primary: "Создать встречу", secondary: "Другое время", hint: "добавится в Google Calendar + Telemost" },
+    confirm: { primary: "Создать встречу", secondary: "Другое время", hint: "Google Calendar + Telemost" },
   },
   {
+    chip: "📊 Покажи отчёт",
     query: "Покажи отчёт по продажам за апрель",
     reply: "Собрала данные из CRM. Апрель — рекордный месяц по выручке.",
     sources: ["amoCRM.сделки-апрель", "аналитика-2026.pdf"],
-    steps: [
-      { icon: "chart", text: "Строю отчёт…", doneText: "Отчёт собран", durMs: 900 },
-    ],
+    steps: [{ icon: "chart", text: "Строю отчёт…", doneText: "Отчёт собран", durMs: 900 }],
     result: {
       kind: "stats",
       items: [
@@ -94,21 +103,28 @@ const SCENARIOS: Scenario[] = [
 type Msg =
   | { kind: "ai-greeting"; text: string }
   | { kind: "user"; text: string }
-  | { kind: "ai"; text: string; revealed: number; sources?: string[]; steps: { step: ActionStep; status: "run" | "done" }[]; result?: ResultCard; confirm?: Scenario["confirm"]; confirmChosen?: "primary" | "secondary" };
+  | {
+      kind: "ai";
+      text: string;
+      revealed: number;
+      sources?: string[];
+      steps: { step: ActionStep; status: "run" | "done" }[];
+      result?: ResultCard;
+      confirm?: Scenario["confirm"];
+      confirmChosen?: "primary";
+    };
 
-const STREAM_SPEED = 18;   // ms на символ (лёгкий стрим)
-const USER_TYPE_SPEED = 45;
-const PAUSE_BETWEEN = 1400;
+const STREAM_SPEED = 18;
 
 export function DemoChat() {
   const [messages, setMessages] = useState<Msg[]>([
-    { kind: "ai-greeting", text: "Привет! Я — Offi. Смотрите, что я умею 👇" },
+    { kind: "ai-greeting", text: "Привет! Я — Оффи. Нажмите кнопку снизу, чтобы увидеть, что я умею 👇" },
   ]);
-  const [userInput, setUserInput] = useState("");
-  const [autoplayOn, setAutoplayOn] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [input, setInput] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
-  const scenarioIdx = useRef(0);
+  const mascot = useMascotEmotions("idle");
 
   const clearTimers = useCallback(() => {
     for (const id of timers.current) window.clearTimeout(id);
@@ -123,28 +139,44 @@ export function DemoChat() {
 
   useEffect(() => {
     if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [messages, userInput]);
+  }, [messages]);
+
+  useEffect(() => () => clearTimers(), [clearTimers]);
+
+  // Стартовое подмигивание (один раз после монтирования).
+  useEffect(() => {
+    const id = window.setTimeout(() => mascot.fire("wink"), 700);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const updateLastAi = useCallback((patch: Partial<Extract<Msg, { kind: "ai" }>>) => {
+    setMessages((m) => {
+      const next = [...m];
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].kind === "ai") {
+          next[i] = { ...(next[i] as Extract<Msg, { kind: "ai" }>), ...patch };
+          return next;
+        }
+      }
+      return m;
+    });
+  }, []);
 
   const runScenario = useCallback(
     (s: Scenario) => {
+      if (busy) return;
       clearTimers();
+      setBusy(true);
+      mascot.fire("surprise");
+      mascot.setState("idle");
 
-      // 1. Пользователь «печатает» запрос
-      setUserInput("");
-      const chars = s.query.split("");
-      chars.forEach((_, i) => {
-        schedule(() => setUserInput(s.query.slice(0, i + 1)), (i + 1) * USER_TYPE_SPEED);
-      });
+      // 1. user msg
+      setMessages((m) => [...m, { kind: "user", text: s.query }]);
 
-      // 2. «Отправка» — добавляем user msg и очищаем инпут
-      const sendAt = chars.length * USER_TYPE_SPEED + 380;
+      // 2. AI плейсхолдер с typing dots
       schedule(() => {
-        setUserInput("");
-        setMessages((m) => [...m, { kind: "user", text: s.query }]);
-      }, sendAt);
-
-      // 3. AI — typing dots
-      schedule(() => {
+        mascot.setState("working");
         setMessages((m) => [
           ...m,
           {
@@ -152,129 +184,127 @@ export function DemoChat() {
             text: s.reply,
             revealed: 0,
             steps: [],
-            sources: undefined,
-            result: undefined,
-            confirm: undefined,
           },
         ]);
-      }, sendAt + 550);
+      }, 450);
 
-      // 4. Стрим ответа
-      const streamStart = sendAt + 1200;
+      // 3. Стрим текста
+      const streamStart = 1100;
       const replyChars = s.reply.length;
       for (let i = 1; i <= replyChars; i++) {
-        schedule(() => {
-          setMessages((m) => {
-            const next = [...m];
-            const idx = next.findIndex((x) => x.kind === "ai" && x.revealed < replyChars);
-            if (idx === -1) return m;
-            next[idx] = { ...(next[idx] as Extract<Msg, { kind: "ai" }>), revealed: i };
-            return next;
-          });
-        }, streamStart + i * STREAM_SPEED);
+        schedule(() => updateLastAi({ revealed: i }), streamStart + i * STREAM_SPEED);
       }
 
-      // 5. Шаги действия — по очереди
+      // 4. Шаги
       let cursor = streamStart + replyChars * STREAM_SPEED + 200;
-      const updateAi = (patch: Partial<Extract<Msg, { kind: "ai" }>>) =>
-        setMessages((m) => {
-          const next = [...m];
-          const idx = [...next].reverse().findIndex((x) => x.kind === "ai");
-          if (idx === -1) return m;
-          const realIdx = next.length - 1 - idx;
-          next[realIdx] = { ...(next[realIdx] as Extract<Msg, { kind: "ai" }>), ...patch };
-          return next;
-        });
-
       s.steps.forEach((step, i) => {
         schedule(() => {
           setMessages((m) => {
             const next = [...m];
-            const ridx = [...next].reverse().findIndex((x) => x.kind === "ai");
-            const realIdx = next.length - 1 - ridx;
-            const ai = next[realIdx] as Extract<Msg, { kind: "ai" }>;
-            const steps = [...ai.steps, { step, status: "run" as const }];
-            next[realIdx] = { ...ai, steps };
-            return next;
+            for (let j = next.length - 1; j >= 0; j--) {
+              if (next[j].kind === "ai") {
+                const ai = next[j] as Extract<Msg, { kind: "ai" }>;
+                next[j] = { ...ai, steps: [...ai.steps, { step, status: "run" }] };
+                return next;
+              }
+            }
+            return m;
           });
         }, cursor);
         cursor += step.durMs;
         schedule(() => {
           setMessages((m) => {
             const next = [...m];
-            const ridx = [...next].reverse().findIndex((x) => x.kind === "ai");
-            const realIdx = next.length - 1 - ridx;
-            const ai = next[realIdx] as Extract<Msg, { kind: "ai" }>;
-            const steps = ai.steps.map((st, j) => (j === i ? { ...st, status: "done" as const } : st));
-            next[realIdx] = { ...ai, steps };
-            return next;
+            for (let j = next.length - 1; j >= 0; j--) {
+              if (next[j].kind === "ai") {
+                const ai = next[j] as Extract<Msg, { kind: "ai" }>;
+                const steps = ai.steps.map((st, k) => (k === i ? { ...st, status: "done" as const } : st));
+                next[j] = { ...ai, steps };
+                return next;
+              }
+            }
+            return m;
           });
         }, cursor);
         cursor += 200;
       });
 
-      // 6. Результат — карточка
+      // 5. Результат
       if (s.result) {
-        schedule(() => updateAi({ result: s.result }), cursor);
+        schedule(() => {
+          updateLastAi({ result: s.result });
+          mascot.fire("joy");
+        }, cursor);
         cursor += 400;
       }
 
-      // 7. Источники
+      // 6. Источники
       if (s.sources) {
-        schedule(() => updateAi({ sources: s.sources }), cursor);
+        schedule(() => updateLastAi({ sources: s.sources }), cursor);
         cursor += 250;
       }
 
-      // 8. Confirm-кнопки
+      // 7. Confirm
       if (s.confirm) {
-        schedule(() => updateAi({ confirm: s.confirm }), cursor);
-        cursor += 900;
+        schedule(() => updateLastAi({ confirm: s.confirm }), cursor);
+        cursor += 300;
       }
 
-      // 9. Авто-click на подтверждение и переход к следующему сценарию
-      if (s.confirm) {
-        schedule(() => {
-          updateAi({ confirmChosen: "primary" });
-        }, cursor + 800);
-        cursor += 1500;
-      }
-
-      // 10. Следующий сценарий
+      // 8. Освобождаем UI — можно нажимать следующие чипсы
       schedule(() => {
-        scenarioIdx.current = (scenarioIdx.current + 1) % SCENARIOS.length;
-        setMessages((m) => (m.length > 9 ? m.slice(-6) : m));
-        if (autoplayOn) runScenario(SCENARIOS[scenarioIdx.current]);
-      }, cursor + PAUSE_BETWEEN);
+        mascot.setState("idle");
+        setBusy(false);
+      }, cursor + 400);
     },
-    [autoplayOn, clearTimers, schedule]
+    [busy, clearTimers, schedule, updateLastAi, mascot]
   );
 
-  useEffect(() => {
-    if (!autoplayOn) return;
-    const id = window.setTimeout(() => runScenario(SCENARIOS[scenarioIdx.current]), 900);
-    return () => {
-      window.clearTimeout(id);
-      clearTimers();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoplayOn]);
-
-  const handleChipClick = (i: number) => {
-    setAutoplayOn(false);
-    clearTimers();
-    scenarioIdx.current = i;
-    runScenario(SCENARIOS[i]);
+  const onConfirm = (idx: number) => {
+    setMessages((m) => {
+      const next = [...m];
+      const msg = next[idx];
+      if (msg.kind !== "ai") return m;
+      if (msg.confirmChosen) return m;
+      next[idx] = { ...msg, confirmChosen: "primary" };
+      return next;
+    });
+    mascot.fire("love");
   };
 
-  const chips = useMemo(
-    () => [
-      { label: "📄 Подготовь договор", idx: 0 },
-      { label: "✉️ Напиши письмо", idx: 1 },
-      { label: "📅 Назначь встречу", idx: 2 },
-      { label: "📊 Покажи отчёт", idx: 3 },
-    ],
-    []
-  );
+  const onSend = () => {
+    if (!input.trim() || busy) return;
+    const q = input.trim();
+    setInput("");
+    // Ищем совпадение по ключевым словам, иначе берём первый сценарий.
+    const key = q.toLowerCase();
+    const match =
+      SCENARIOS.find((s) => key.includes("договор") && s.chip.includes("договор")) ||
+      SCENARIOS.find((s) => key.includes("письм") && s.chip.includes("письмо")) ||
+      SCENARIOS.find((s) => (key.includes("встреч") || key.includes("календ")) && s.chip.includes("встречу")) ||
+      SCENARIOS.find((s) => (key.includes("отчёт") || key.includes("отчет") || key.includes("аналит")) && s.chip.includes("отчёт"));
+    if (match) {
+      runScenario({ ...match, query: q });
+    } else {
+      // Неизвестный запрос — просто покажем удивление
+      setMessages((m) => [
+        ...m,
+        { kind: "user", text: q },
+        {
+          kind: "ai",
+          text: "Хм, в демо у меня только 4 сценария (договор / письмо / встреча / отчёт). В реальной платформе — сотни. Попробуйте кнопки ниже 👇",
+          revealed: 0,
+          steps: [],
+        },
+      ]);
+      schedule(() => {
+        mascot.fire("pensive");
+        const text = "Хм, в демо у меня только 4 сценария (договор / письмо / встреча / отчёт). В реальной платформе — сотни. Попробуйте кнопки ниже 👇";
+        for (let i = 1; i <= text.length; i++) {
+          schedule(() => updateLastAi({ revealed: i }), i * STREAM_SPEED);
+        }
+      }, 300);
+    }
+  };
 
   return (
     <>
@@ -282,64 +312,88 @@ export function DemoChat() {
         className="rounded-[20px] border border-border bg-card overflow-hidden"
         style={{ boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 16px 48px rgba(2,89,221,0.06)" }}
       >
-        {/* header */}
-        <div className="flex items-center gap-2.5 px-[18px] py-3 border-b border-[hsl(var(--border-light))]">
-          <OffiMark size={34} />
+        {/* header — живой Оффи */}
+        <div className="flex items-center gap-3 px-[18px] py-3 border-b border-[hsl(var(--border-light))]">
+          <div className="shrink-0 relative">
+            <div
+              className="absolute inset-0 rounded-full pointer-events-none"
+              style={{ background: "radial-gradient(closest-side, hsl(var(--accent-brand-light)), transparent 70%)" }}
+              aria-hidden
+            />
+            <GuestMascot
+              size={40}
+              state={mascot.props.state}
+              oneshotId={mascot.props.oneshotId}
+              oneshotKey={mascot.props.oneshotKey}
+              animated
+            />
+          </div>
           <div className="flex-1">
-            <div className="text-sm font-semibold text-foreground">Offi</div>
+            <div className="text-sm font-semibold text-foreground">Оффи</div>
             <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--success))] animate-pulse" />
-              <span className="text-[11px] text-[hsl(var(--text-tertiary))]">Онлайн · показываю, как работаю</span>
+              <span
+                className={
+                  "w-1.5 h-1.5 rounded-full " +
+                  (busy ? "bg-primary animate-pulse" : "bg-[hsl(var(--success))]")
+                }
+              />
+              <span className="text-[11px] text-[hsl(var(--text-tertiary))]">
+                {busy ? "работаю…" : "онлайн"}
+              </span>
             </div>
           </div>
-          <span className="text-[10px] text-[hsl(var(--text-tertiary))] uppercase tracking-wider font-semibold">DEMO</span>
+          <span className="text-[10px] text-[hsl(var(--text-tertiary))] uppercase tracking-wider font-semibold">
+            DEMO
+          </span>
         </div>
 
         {/* messages */}
-        <div ref={scroller} className="p-[18px] min-h-[320px] max-h-[380px] overflow-y-auto no-scrollbar">
+        <div ref={scroller} className="p-[18px] min-h-[260px] max-h-[360px] overflow-y-auto no-scrollbar">
           {messages.map((m, i) => (
             <div key={i}>
               {m.kind === "ai-greeting" && <GreetingBubble text={m.text} />}
               {m.kind === "user" && <UserBubble text={m.text} />}
-              {m.kind === "ai" && <AiBubble msg={m} />}
+              {m.kind === "ai" && <AiBubble msg={m} onConfirm={() => onConfirm(i)} />}
             </div>
           ))}
         </div>
 
-        {/* composer — во время автоплея показываем фантомный набор */}
+        {/* composer */}
         <div className="px-[18px] py-3 border-t border-[hsl(var(--border-light))] flex gap-2 items-center">
           <Paperclip className="w-4 h-4 text-[hsl(var(--text-tertiary))] shrink-0" />
           <Input
-            value={userInput}
-            onChange={(e) => {
-              setAutoplayOn(false);
-              clearTimers();
-              setUserInput(e.target.value);
-            }}
-            placeholder="Напишите задачу…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && onSend()}
+            placeholder={busy ? "Оффи отвечает…" : "Напишите задачу или выберите пример…"}
             className="flex-1 h-10 text-[13px]"
-            readOnly={autoplayOn}
+            disabled={busy}
           />
           <button
-            className="w-10 h-10 rounded-[10px] grid place-items-center text-lg transition-all"
+            onClick={onSend}
+            className="w-10 h-10 rounded-[10px] grid place-items-center text-lg transition-all disabled:opacity-60"
+            disabled={!input.trim() || busy}
             style={{
-              background: userInput.trim() ? "hsl(var(--accent-brand))" : "hsl(var(--surface-alt))",
-              color: userInput.trim() ? "#fff" : "hsl(var(--text-tertiary))",
+              background: input.trim() && !busy ? "hsl(var(--accent-brand))" : "hsl(var(--surface-alt))",
+              color: input.trim() && !busy ? "#fff" : "hsl(var(--text-tertiary))",
             }}
             aria-label="Отправить"
-          >↑</button>
+          >
+            ↑
+          </button>
         </div>
       </div>
 
       {/* chips */}
       <div className="flex gap-2 mt-3.5 flex-wrap justify-center">
-        {chips.map((c, i) => (
+        {SCENARIOS.map((s) => (
           <button
-            key={c.label}
-            onClick={() => handleChipClick(c.idx)}
-            className="btn-bounce px-3.5 py-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary hover:bg-[hsl(var(--accent-brand-light))]"
+            key={s.chip}
+            onClick={() => runScenario(s)}
+            disabled={busy}
+            className="btn-bounce px-3.5 py-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary hover:bg-[hsl(var(--accent-brand-light))] disabled:opacity-50 disabled:pointer-events-none"
           >
-            {c.label}
+            {s.chip}
           </button>
         ))}
       </div>
@@ -350,7 +404,9 @@ export function DemoChat() {
 function GreetingBubble({ text }: { text: string }) {
   return (
     <div className="flex gap-2.5 mb-3.5 anim-slide-right">
-      <OffiMark size={30} />
+      <div className="w-[30px] h-[30px] rounded-full bg-[hsl(var(--accent-brand-light))] grid place-items-center shrink-0">
+        <Sparkles className="w-3.5 h-3.5 text-primary" />
+      </div>
       <div className="px-3.5 py-2.5 rounded-[14px] rounded-tl-[4px] bg-[hsl(var(--accent-brand-light))] text-[13px] text-foreground">
         {text}
       </div>
@@ -361,36 +417,40 @@ function GreetingBubble({ text }: { text: string }) {
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex gap-2.5 mb-3.5 flex-row-reverse anim-slide-left">
-      <div className="w-[30px] h-[30px] rounded-full grid place-items-center text-[12px] font-bold shrink-0 bg-[hsl(var(--surface-alt))] text-foreground">Вы</div>
-      <div className="px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground max-w-[360px] bg-card border border-border rounded-[14px] rounded-tr-[4px]">
+      <div className="w-[30px] h-[30px] rounded-full grid place-items-center text-[12px] font-bold shrink-0 bg-[hsl(var(--surface-alt))] text-foreground">
+        Вы
+      </div>
+      <div className="px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground max-w-[300px] bg-card border border-border rounded-[14px] rounded-tr-[4px]">
         {text}
       </div>
     </div>
   );
 }
 
-function AiBubble({ msg }: { msg: Extract<Msg, { kind: "ai" }> }) {
+function AiBubble({ msg, onConfirm }: { msg: Extract<Msg, { kind: "ai" }>; onConfirm: () => void }) {
   const shownText = msg.text.slice(0, msg.revealed);
   const streaming = msg.revealed < msg.text.length;
   const showDots = msg.revealed === 0 && msg.steps.length === 0;
 
   return (
     <div className="flex gap-2.5 mb-3.5 anim-slide-right">
-      <OffiMark size={30} />
-      <div className="max-w-[400px] space-y-2 min-w-0">
-        {/* основной ответ */}
+      <div className="w-[30px] h-[30px] rounded-full bg-[hsl(var(--accent-brand-light))] grid place-items-center shrink-0">
+        <Sparkles className="w-3.5 h-3.5 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0 max-w-[320px] space-y-2">
         <div className="px-3.5 py-2.5 rounded-[14px] rounded-tl-[4px] bg-[hsl(var(--accent-brand-light))] text-[13px] leading-[1.55] text-foreground">
           {showDots ? (
             <TypingDots />
           ) : (
             <span>
               {shownText}
-              {streaming && <span className="inline-block w-[1.5px] h-[14px] bg-primary/70 ml-0.5 align-middle animate-pulse" />}
+              {streaming && (
+                <span className="inline-block w-[1.5px] h-[14px] bg-primary/70 ml-0.5 align-middle animate-pulse" />
+              )}
             </span>
           )}
         </div>
 
-        {/* шаги действия */}
         {msg.steps.length > 0 && (
           <div className="rounded-xl border border-[hsl(var(--border-light))] bg-card/60 px-3 py-2 space-y-1.5">
             {msg.steps.map((s, i) => (
@@ -399,21 +459,22 @@ function AiBubble({ msg }: { msg: Extract<Msg, { kind: "ai" }> }) {
           </div>
         )}
 
-        {/* результат */}
         {msg.result && <ResultCardView card={msg.result} />}
 
-        {/* источники */}
         {msg.sources && msg.sources.length > 0 && (
           <div className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--text-tertiary))] px-1 flex-wrap anim-fade-in">
             <span>Источники:</span>
             {msg.sources.map((s) => (
-              <span key={s} className="px-1.5 py-0.5 rounded bg-[hsl(var(--surface-alt))] font-medium">{s}</span>
+              <span key={s} className="px-1.5 py-0.5 rounded bg-[hsl(var(--surface-alt))] font-medium">
+                {s}
+              </span>
             ))}
           </div>
         )}
 
-        {/* confirm */}
-        {msg.confirm && <ConfirmRow confirm={msg.confirm} chosen={msg.confirmChosen} />}
+        {msg.confirm && (
+          <ConfirmRow confirm={msg.confirm} chosen={msg.confirmChosen} onPrimary={onConfirm} />
+        )}
       </div>
     </div>
   );
@@ -441,12 +502,18 @@ function StepLine({ step, status }: { step: ActionStep; status: "run" | "done" }
 
 function stepIcon(k: ActionStep["icon"]) {
   switch (k) {
-    case "search": return Search;
-    case "doc": return FileText;
-    case "mail": return Mail;
-    case "cal": return CalendarDays;
-    case "chart": return BarChart3;
-    case "spark": return Sparkles;
+    case "search":
+      return Search;
+    case "doc":
+      return FileText;
+    case "mail":
+      return Mail;
+    case "cal":
+      return CalendarDays;
+    case "chart":
+      return BarChart3;
+    case "spark":
+      return Sparkles;
   }
 }
 
@@ -459,7 +526,9 @@ function ResultCardView({ card }: { card: ResultCard }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-semibold text-foreground truncate">{card.name}</div>
-          <div className="text-[11px] text-[hsl(var(--text-tertiary))] truncate">{card.hint} · {card.size}</div>
+          <div className="text-[11px] text-[hsl(var(--text-tertiary))] truncate">
+            {card.hint} · {card.size}
+          </div>
         </div>
       </div>
     );
@@ -485,7 +554,9 @@ function ResultCardView({ card }: { card: ResultCard }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-semibold text-foreground">{card.title}</div>
-          <div className="text-[11px] text-[hsl(var(--text-tertiary))]">{card.when} · {card.people.join(", ")}</div>
+          <div className="text-[11px] text-[hsl(var(--text-tertiary))]">
+            {card.when} · {card.people.join(", ")}
+          </div>
         </div>
       </div>
     );
@@ -497,7 +568,9 @@ function ResultCardView({ card }: { card: ResultCard }) {
           <div key={it.label} className="text-center">
             <div className="text-[15px] font-extrabold text-foreground tracking-tight">{it.value}</div>
             <div className="text-[10px] text-[hsl(var(--text-tertiary))] mt-0.5">{it.label}</div>
-            {it.delta && <div className="text-[10px] text-[hsl(var(--success))] font-semibold mt-0.5">{it.delta}</div>}
+            {it.delta && (
+              <div className="text-[10px] text-[hsl(var(--success))] font-semibold mt-0.5">{it.delta}</div>
+            )}
           </div>
         ))}
       </div>
@@ -509,13 +582,17 @@ function ResultCardView({ card }: { card: ResultCard }) {
 function ConfirmRow({
   confirm,
   chosen,
+  onPrimary,
 }: {
   confirm: NonNullable<Scenario["confirm"]>;
-  chosen?: "primary" | "secondary";
+  chosen?: "primary";
+  onPrimary: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 pt-0.5 anim-fade-in">
       <button
+        onClick={onPrimary}
+        disabled={!!chosen}
         className={
           "px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all btn-bounce " +
           (chosen === "primary"
@@ -524,12 +601,17 @@ function ConfirmRow({
         }
       >
         {chosen === "primary" ? (
-          <span className="inline-flex items-center gap-1"><Check className="w-3 h-3" /> Выполнено</span>
+          <span className="inline-flex items-center gap-1">
+            <Check className="w-3 h-3" /> Выполнено
+          </span>
         ) : (
           confirm.primary
         )}
       </button>
-      <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-foreground bg-card border border-border">
+      <button
+        disabled={!!chosen}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-foreground bg-card border border-border disabled:opacity-50"
+      >
         {confirm.secondary}
       </button>
       <span className="text-[11px] text-[hsl(var(--text-tertiary))]">{confirm.hint}</span>
