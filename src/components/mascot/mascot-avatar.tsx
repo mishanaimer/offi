@@ -32,6 +32,9 @@ export type MascotAvatarProps = {
   animated?: boolean;
   /** Слушать глобальные one-shot событие. Выключи для превью. */
   listenOneshots?: boolean;
+  /** Глаза следят за курсором. Включай для центрального маскота (hero пустого чата). */
+  trackCursor?: boolean;
+  trackRadius?: number;
   className?: string;
 };
 
@@ -41,6 +44,8 @@ export function MascotAvatar({
   size = 28,
   animated = false,
   listenOneshots = true,
+  trackCursor = false,
+  trackRadius,
   className,
 }: MascotAvatarProps) {
   const brand = useBranding();
@@ -86,6 +91,8 @@ export function MascotAvatar({
         oneshotId={oneshot?.id ?? null}
         size={size}
         animated={animated}
+        trackCursor={trackCursor}
+        trackRadius={trackRadius}
       />
     </span>
   );

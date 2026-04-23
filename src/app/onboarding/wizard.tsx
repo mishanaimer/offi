@@ -116,6 +116,7 @@ export function OnboardingWizard({ userEmail, userId }: { userEmail: string; use
             oneshotId={mascot.props.oneshotId}
             oneshotKey={mascot.props.oneshotKey}
             animated
+            trackCursor
           />
         </div>
         <div className="flex-1">

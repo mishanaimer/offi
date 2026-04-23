@@ -21,8 +21,10 @@ export type BrandMorphProps = {
   cycleInterval?: number;
   /** Стартовое состояние. */
   startState?: MorphState;
-  /** Морф при наведении: text↔robot на enter/leave. */
+  /** Морф при наведении: на enter морфит в robot и держит hoverHoldMs, потом возвращает. */
   hoverMorph?: boolean;
+  /** Сколько держать robot-state после hover'а, мс. По умолчанию 5000. */
+  hoverHoldMs?: number;
   /** Задержка автоморфа (после монтирования), сек. */
   startDelay?: number;
   /** Реакция на hover — прыжок радости, прищур. */
@@ -129,6 +131,36 @@ const clamp = (v: number, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 const easeSin = (t: number) => Math.sin(t * Math.PI);
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+
+// Цвета по частям: у «a» counter должен быть БЕЛЫМ (дырка в боуле),
+// у робота — белый внутренний контур + светло-синий визор. Без этого
+// «a» заливается синим полностью и лицо робота пропадает.
+type PartColor = { text: string; robot: string };
+function partColors(brand: string, visorText: string, visorRobot: string): Record<PartId, PartColor> {
+  return {
+    body:   { text: brand,      robot: brand },
+    border: { text: "#ffffff",  robot: "#ffffff" },
+    screen: { text: visorText,  robot: visorRobot },
+    lEye:   { text: brand,      robot: brand },
+    rEye:   { text: brand,      robot: brand },
+    aBall:  { text: brand,      robot: brand },
+    stick:  { text: brand,      robot: brand },
+  };
+}
+
+function hexRGB(hex: string): [number, number, number] {
+  const m = hex.replace("#", "");
+  const s = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+}
+function interpColor(a: string, b: string, t: number) {
+  const A = hexRGB(a);
+  const B = hexRGB(b);
+  const r = Math.round(A[0] + (B[0] - A[0]) * t);
+  const g = Math.round(A[1] + (B[1] - A[1]) * t);
+  const bl = Math.round(A[2] + (B[2] - A[2]) * t);
+  return `rgb(${r},${g},${bl})`;
+}
 
 // Веки для «joy» — улыбка прищуром (как в mascot-generator.jsx).
 function joyLidProfile(p: number, T: number) {
@@ -285,6 +317,7 @@ export function BrandMorph({
   cycleInterval = 5.2,
   startState = "text",
   hoverMorph = false,
+  hoverHoldMs = 5000,
   startDelay = 0.9,
   interactive = true,
   phase = 0,
@@ -300,8 +333,8 @@ export function BrandMorph({
   const instRef = useRef<MascotInstance | null>(null);
 
   // Применяем свежие параметры в живой инстанс без пересоздания.
-  const optsRef = useRef({ autoCycle, hoverMorph, interactive, showcaseMode, cycleInterval, startDelay, color, visorBg });
-  optsRef.current = { autoCycle, hoverMorph, interactive, showcaseMode, cycleInterval, startDelay, color, visorBg };
+  const optsRef = useRef({ autoCycle, hoverMorph, interactive, showcaseMode, cycleInterval, startDelay, color, visorBg, hoverHoldMs });
+  optsRef.current = { autoCycle, hoverMorph, interactive, showcaseMode, cycleInterval, startDelay, color, visorBg, hoverHoldMs };
 
   useEffect(() => {
     if (!hostRef.current || !brandRef.current) return;
@@ -417,9 +450,26 @@ export function BrandMorph({
       }
     }
 
+    // Hover-hold: при наведении — морф в robot и удерживаем robot-state на
+    // hoverHoldMs, независимо от того, ушёл курсор или нет. Новый hover в этот
+    // промежуток — перезапускает таймер (даём пользователю ещё 5 секунд).
+    let hoverRevertTimer: number | null = null;
+    const clearHoverTimer = () => {
+      if (hoverRevertTimer !== null) {
+        window.clearTimeout(hoverRevertTimer);
+        hoverRevertTimer = null;
+      }
+    };
     const onEnter = () => {
       inst.brandHover = 1;
-      if (optsRef.current.hoverMorph) morphTo("robot");
+      if (optsRef.current.hoverMorph) {
+        morphTo("robot");
+        clearHoverTimer();
+        hoverRevertTimer = window.setTimeout(() => {
+          morphTo("text");
+          hoverRevertTimer = null;
+        }, optsRef.current.hoverHoldMs);
+      }
       if (optsRef.current.interactive) {
         fireSurprise();
         fireJoy();
@@ -427,7 +477,7 @@ export function BrandMorph({
     };
     const onLeave = () => {
       inst.brandHover = 0;
-      if (optsRef.current.hoverMorph) morphTo("text");
+      // Специально НЕ морфим обратно — держим robot hoverHoldMs.
     };
     const onSvgEnter = () => {
       inst.directHover = 1;
@@ -620,11 +670,16 @@ export function BrandMorph({
       P.stick.sx = (1 - rness) * textDotPulse + rness * (1 + Math.abs(sway) * 0.012);
       P.stick.sy = (1 - rness) * textDotPulse + rness * (1 + Math.abs(sway) * 0.012);
 
-      // step + render
+      // step + render (цвет частей интерполируется text↔robot по rness)
       const brandColor = optsRef.current.color || "#0259DD";
+      const visorRobot = optsRef.current.visorBg || "#dfe6ff";
+      const visorText = "#e7edff"; // ближе к фону — в тексте почти невидим
+      const colors = partColors(brandColor, visorText, visorRobot);
       for (const id of Z) {
         P[id].step(dt);
-        P[id].render(brandColor);
+        const c = colors[id];
+        const fill = c.text === c.robot ? c.text : interpColor(c.text, c.robot, rness);
+        P[id].render(fill);
       }
 
       // lids (joy + blink)
@@ -640,6 +695,7 @@ export function BrandMorph({
 
     return () => {
       cancelAnimationFrame(rafId);
+      clearHoverTimer();
       brandEl.removeEventListener("pointerenter", onEnter);
       brandEl.removeEventListener("pointerleave", onLeave);
       svg.removeEventListener("pointerenter", onSvgEnter);

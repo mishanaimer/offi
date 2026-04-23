@@ -22,6 +22,8 @@ export type MascotLoaderProps = {
   state?: "idle" | "working";
   color?: string;
   bg?: string;
+  /** Глаза следят за курсором. */
+  trackCursor?: boolean;
   className?: string;
 };
 
@@ -33,6 +35,7 @@ export function MascotLoader({
   state = "working",
   color = "#0259DD",
   bg = "#EBF2FF",
+  trackCursor = true,
   className,
 }: MascotLoaderProps) {
   const circleRef = useRef<SVGCircleElement>(null);
@@ -94,6 +97,7 @@ export function MascotLoader({
             color={color}
             bg={bg}
             animated
+            trackCursor={trackCursor}
           />
         </div>
       </div>

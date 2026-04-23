@@ -79,6 +79,7 @@ export function RegisterForm() {
                 oneshotId={mascot.props.oneshotId}
                 oneshotKey={mascot.props.oneshotKey}
                 animated
+                trackCursor
               />
             </div>
             <h1 className="mt-4 text-xl font-bold tracking-[-0.02em]">

@@ -58,6 +58,15 @@ export type RobotMascotProps = {
   size?: number;
   /** When false, skip the animation loop (useful for static previews). */
   animated?: boolean;
+  /**
+   * Глаза следят за курсором (как у маскот-морфа). Включаем для центральных
+   * маскотов: hero нового чата, логин/регистрация, онбординг, экран загрузки.
+   * Во время one-shot эмоции (surprise/joy/etc.) слежение не применяется —
+   * эмоция диктует позицию глаз.
+   */
+  trackCursor?: boolean;
+  /** Радиус в px, при котором интенсивность слежения падает до 0 (по умолчанию 360). */
+  trackRadius?: number;
   className?: string;
 };
 
@@ -72,12 +81,44 @@ export function RobotMascot({
   oneshotId,
   size = 200,
   animated = true,
+  trackCursor = false,
+  trackRadius = 360,
   className,
 }: RobotMascotProps) {
   const { progress, currentOneshot } = useLocalOneshot(oneshotKey, oneshotId);
   // В статичной позе показываем нейтральный «смотрит прямо» кадр — t=0.
   // Одноразовые эмоции (oneshot) играем всегда, даже в статичном маскоте.
-  const t = useAnimClock(animated);
+  const t = useAnimClock(animated || trackCursor);
+
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const cursorRef = useRef({ mx: 0, my: 0, active: 0 });
+  useEffect(() => {
+    if (!trackCursor) return;
+    const onMove = (e: PointerEvent) => {
+      if (!svgRef.current) return;
+      const r = svgRef.current.getBoundingClientRect();
+      if (r.width === 0) return;
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dx = e.clientX - cx;
+      const dy = e.clientY - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      // Затухание: чем дальше курсор, тем слабее следит. За радиусом — 0.
+      const active = Math.max(0, Math.min(1, 1 - dist / trackRadius));
+      cursorRef.current.mx = Math.max(-1, Math.min(1, dx / (trackRadius * 0.6)));
+      cursorRef.current.my = Math.max(-1, Math.min(1, dy / (trackRadius * 0.6)));
+      cursorRef.current.active = active;
+    };
+    const onLeave = () => {
+      cursorRef.current.active = 0;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerleave", onLeave);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerleave", onLeave);
+    };
+  }, [trackCursor, trackRadius]);
 
   const sw = Math.max(1.6, size * 0.0275);
   const cx = size / 2;
@@ -193,6 +234,7 @@ export function RobotMascot({
 
   return (
     <svg
+      ref={svgRef}
       width={size}
       height={size}
       viewBox={vb}
@@ -343,6 +385,9 @@ export function RobotMascot({
             eyeH={eyeH}
             color={color}
             visorBg={visorBg}
+            trackMx={trackCursor ? cursorRef.current.mx : 0}
+            trackMy={trackCursor ? cursorRef.current.my : 0}
+            trackActive={trackCursor ? cursorRef.current.active : 0}
           />
         </g>
       </g>
@@ -433,6 +478,9 @@ function EyesLids({
   eyeH,
   color,
   visorBg,
+  trackMx = 0,
+  trackMy = 0,
+  trackActive = 0,
 }: {
   emotion: MascotEmotion;
   oneshotProgress: number | null;
@@ -445,6 +493,9 @@ function EyesLids({
   eyeH: number;
   color: string;
   visorBg: string;
+  trackMx?: number;
+  trackMy?: number;
+  trackActive?: number;
 }) {
   const lx = cx - spacing;
   const rx = cx + spacing;
@@ -470,9 +521,19 @@ function EyesLids({
   let botL = 0;
   let botR = 0;
 
+  // Слежение за курсором: работает для idle/working, приглушается микро-шевелениями.
+  // Для одноразовых эмоций курсор НЕ применяется — эмоция владеет взглядом.
+  const tracking = trackActive > 0 && (emotion === "idle" || emotion === "working");
+  const trackEyeX = tracking ? trackMx * eyeW * 0.85 * trackActive : 0;
+  const trackEyeY = tracking ? trackMy * eyeH * 0.45 * trackActive : 0;
+
   switch (emotion) {
     case "idle":
-      if (animated) {
+      if (tracking) {
+        // Курсор ведёт глаза; идёт лёгкое «микродвижение» поверх для живости.
+        eyeOffX = trackEyeX + (animated ? Math.sin(t * 0.6) * eyeW * 0.03 * (1 - trackActive) : 0);
+        eyeOffY = trackEyeY + (animated ? Math.sin(t * 0.45) * eyeH * 0.02 * (1 - trackActive) : 0);
+      } else if (animated) {
         eyeOffX = Math.sin(t * 0.3) * eyeW * 0.07;
         eyeOffY = Math.sin(t * 0.22 + 1.2) * eyeH * 0.035;
       }
@@ -485,9 +546,19 @@ function EyesLids({
       topR = 0.18;
       botL = 0.06;
       botR = 0.06;
-      if (animated) {
+      if (tracking) {
+        // При слежении приглушаем авто-взгляд (smoothLook) и ведём глаза к курсору.
+        eyeOffX = trackEyeX;
+        eyeOffY = trackEyeY;
+        if (animated) {
+          // Лёгкий концентрированный тик-ток глазами поверх курсора.
+          eyeOffX += Math.sin(t * 0.8) * eyeW * 0.04 * (1 - trackActive);
+        }
+      } else if (animated) {
         eyeOffX = smoothLook(t, 1.0, eyeW * 0.75);
         eyeOffY = smoothLook(t + 5.3, 0.65, eyeH * 0.14);
+      }
+      if (animated) {
         const rc = 6.0;
         const rp = (t % rc) / rc;
         if (rp > 0.35 && rp < 0.6) {

@@ -22,6 +22,9 @@ export type GuestMascotProps = {
   color?: string;
   bg?: string;
   animated?: boolean;
+  /** Глаза следят за курсором (для центральных маскотов). */
+  trackCursor?: boolean;
+  trackRadius?: number;
   className?: string;
 };
 
@@ -36,6 +39,8 @@ export function GuestMascot({
   color = DEFAULT_COLOR,
   bg = DEFAULT_BG,
   animated = true,
+  trackCursor = false,
+  trackRadius,
   className,
 }: GuestMascotProps) {
   return (
@@ -55,6 +60,8 @@ export function GuestMascot({
         oneshotKey={oneshotKey}
         size={size}
         animated={animated}
+        trackCursor={trackCursor}
+        trackRadius={trackRadius}
       />
     </span>
   );
