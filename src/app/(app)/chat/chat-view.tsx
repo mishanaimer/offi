@@ -110,6 +110,10 @@ export function ChatView({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stuckToBottomRef = useRef(true);
+  // Клиентские id сообщений, которые МЫ только что отправили (user + streaming AI-плейсхолдер).
+  // Нужны, чтобы при приходе того же сообщения через Realtime не появился дубликат.
+  const pendingUserIdsRef = useRef<string[]>([]);
+  const streamingAiIdsRef = useRef<Set<string>>(new Set());
 
   // Отслеживаем, находится ли пользователь у самого низа
   useEffect(() => {
@@ -161,28 +165,38 @@ export function ChatView({
           const row = payload.new as any;
           setMessages((m) => {
             if (m.some((x) => x.id === row.id)) return m;
-            // Если есть streaming-плейсхолдер ассистента — «усыновляем» его DB-id,
-            // чтобы последующие UPDATE применялись по правильному ключу.
             if (row.is_ai) {
-              const idx = m.findIndex((x) => x.streaming && x.role === "assistant");
+              // Если есть streaming-плейсхолдер ассистента — «усыновляем» его DB-id
+              // (контент не перезаписываем — он уже наполняется стримом)
+              const idx = m.findIndex(
+                (x) => x.role === "assistant" && streamingAiIdsRef.current.has(x.id)
+              );
               if (idx >= 0) {
                 const next = [...m];
+                streamingAiIdsRef.current.delete(next[idx].id);
                 next[idx] = {
                   ...next[idx],
                   id: row.id,
                   content: next[idx].content || row.content || "",
                   sources: next[idx].sources ?? row.sources ?? undefined,
+                  created_at: next[idx].created_at ?? row.created_at,
                 };
                 return next;
               }
             } else {
-              // User-сообщение: локальное добавляется мгновенно с клиентским UUID.
-              // Совпадает по content — перевешиваем на DB id.
-              for (let i = m.length - 1; i >= 0; i--) {
-                const msg = m[i];
-                if (msg.role === "user" && msg.content === row.content && msg.id !== row.id) {
+              // User-сообщение: мы добавляем локально с клиентским UUID ещё ДО запроса.
+              // Берём самый старый ожидающий клиентский id и перевешиваем его на DB-id.
+              const pending = pendingUserIdsRef.current;
+              if (pending.length > 0) {
+                const clientId = pending.shift()!;
+                const idx = m.findIndex((x) => x.id === clientId);
+                if (idx >= 0) {
                   const next = [...m];
-                  next[i] = { ...msg, id: row.id, created_at: row.created_at };
+                  next[idx] = {
+                    ...next[idx],
+                    id: row.id,
+                    created_at: row.created_at,
+                  };
                   return next;
                 }
               }
@@ -211,15 +225,24 @@ export function ChatView({
         (payload) => {
           const row = payload.new as any;
           setMessages((m) =>
-            m.map((x) =>
-              x.id === row.id
-                ? {
-                    ...x,
-                    content: row.content ?? x.content,
-                    sources: row.sources ?? x.sources,
-                  }
-                : x
-            )
+            m.map((x) => {
+              if (x.id !== row.id) return x;
+              // Пока мы стримим ответ сами — не откатываем контент по UPDATE из БД
+              // (серверный throttled-save может быть отстающим).
+              if (x.streaming) {
+                return { ...x, sources: row.sources ?? x.sources };
+              }
+              // Иначе — применяем более «длинный» контент как safer merge.
+              const nextContent =
+                typeof row.content === "string" && row.content.length > (x.content?.length ?? 0)
+                  ? row.content
+                  : x.content;
+              return {
+                ...x,
+                content: nextContent,
+                sources: row.sources ?? x.sources,
+              };
+            })
           );
         }
       )
@@ -348,6 +371,9 @@ export function ChatView({
       created_at: new Date().toISOString(),
     };
     const pendingAi: Msg = { id: crypto.randomUUID(), role: "assistant", content: "", streaming: true };
+    // регистрируем id для Realtime-дедупликации
+    pendingUserIdsRef.current.push(userMsg.id);
+    streamingAiIdsRef.current.add(pendingAi.id);
     setMessages((m) => [...m, userMsg, pendingAi]);
     // очищаем чипы после отправки (файлы остаются в базе знаний)
     setAttachments([]);
@@ -440,6 +466,7 @@ export function ChatView({
       );
     } finally {
       setSending(false);
+      streamingAiIdsRef.current.delete(pendingAi.id);
       // вернуть фокус, чтобы можно было сразу писать дальше
       textareaRef.current?.focus();
     }
