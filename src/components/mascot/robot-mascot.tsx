@@ -232,6 +232,14 @@ export function RobotMascot({
   const uid = useMemo(() => Math.random().toString(36).slice(2, 8), []);
   const visorBg = bg || "#EEF4FF";
 
+  // Голова тянется к курсору — это то, что делает «оживление» вместо скучных
+  // крутящихся глаз. Амплитуду держим небольшой (~2% / 1.3% от size), чтобы
+  // не прыгать за каждое движение мыши.
+  const ca = trackCursor ? cursorRef.current.active : 0;
+  const cTiltX = trackCursor ? cursorRef.current.mx * size * 0.022 * ca : 0;
+  const cTiltY = trackCursor ? cursorRef.current.my * size * 0.013 * ca : 0;
+  const cScale = 1 + ca * 0.012;
+
   return (
     <svg
       ref={svgRef}
@@ -239,7 +247,16 @@ export function RobotMascot({
       height={size}
       viewBox={vb}
       className={className}
-      style={{ overflow: "visible", display: "block" }}
+      style={{
+        overflow: "visible",
+        display: "block",
+        transform: trackCursor
+          ? `translate(${cTiltX.toFixed(2)}px, ${cTiltY.toFixed(2)}px) scale(${cScale.toFixed(3)})`
+          : undefined,
+        transformOrigin: "50% 60%",
+        transition: trackCursor ? "transform 0.18s cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
+        willChange: trackCursor ? "transform" : undefined,
+      }}
       aria-hidden
     >
       <defs>

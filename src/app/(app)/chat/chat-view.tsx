@@ -1114,9 +1114,9 @@ function EmptyState({
   return (
     <div className="pt-8 md:pt-16 pb-4 text-center">
       <div className="inline-flex">
-        <MascotAvatar size={96} animated trackCursor />
+        <MascotAvatar size={168} animated trackCursor />
       </div>
-      <h1 className="mt-5 text-[22px] md:text-2xl font-semibold tracking-tight">
+      <h1 className="mt-6 text-[22px] md:text-2xl font-semibold tracking-tight">
         {welcome}
       </h1>
 
