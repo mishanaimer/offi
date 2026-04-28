@@ -5,3 +5,7 @@ output/preview/
 .venv/
 .idea/
 .vscode/
+# артефакты smoke-тестов (огромные XML)
+merged*.xml
+# отладочные скрипты (создаются на лету при дебаге merge-runs)
+debug-*.mjs
