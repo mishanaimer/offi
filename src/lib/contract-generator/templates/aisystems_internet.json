@@ -1,0 +1,100 @@
+{
+  "name": "Договор Айсистемс — доступ к Интернету",
+  "description": "Шаблон договора ООО «Айсистемс» с абонентом на предоставление услуг доступа к сети Интернет. Включает преамбулу, реквизиты, Спецификацию (Прил. 1), Условия (Прил. 2), Акт сдачи-приёмки (Прил. 3).",
+  "docx_file": "aisystems_internet.docx",
+
+  "fields": [
+    {"key": "contract_number", "label": "Номер договора", "placeholder": "28/0426", "hint": "Формат ДД/ММГГ — например 28/0426 для 28 апреля 2026"},
+    {"key": "contract_day", "label": "День договора (число)", "placeholder": "28", "hint": "Только число, без кавычек"},
+    {"key": "contract_month", "label": "Месяц (родительный падеж)", "placeholder": "апреля", "hint": "января, февраля, …, декабря"},
+    {"key": "contract_year", "label": "Год", "placeholder": "2026"},
+    {"key": "act_date_short", "label": "Дата акта (короткий формат)", "placeholder": "28.04.2026", "hint": "ДД.ММ.ГГГГ"},
+    {"key": "act_day_padded", "label": "День в Акте (с ведущим нулём)", "placeholder": "28", "hint": "Например: 02, 28 — двузначно"},
+    {"key": "act_city", "label": "Город составления акта", "placeholder": "Санкт-Петербург"},
+    {"key": "service_start_date", "label": "Дата включения услуги (в Акте)", "placeholder": "06.05.2026"},
+
+    {"key": "client_full_name", "label": "Полное наименование Абонента", "placeholder": "Общество с ограниченной ответственностью «ЭДИФАРМ»"},
+    {"key": "client_short_name", "label": "Краткое наименование Абонента", "placeholder": "ООО «ЭДИФАРМ»"},
+    {"key": "client_signatory_clause", "label": "Формулировка о подписанте", "type": "textarea", "placeholder": "в лице Генерального директора Антоновой Светланы Александровны, действующей на основании Устава", "hint": "С предлога «в лице …»"},
+    {"key": "client_signatory_short", "label": "ФИО подписанта (для подписи)", "placeholder": "Антонова С.А.", "hint": "Фамилия И.О."},
+    {"key": "client_signatory_title", "label": "Должность подписанта", "placeholder": "Генеральный директор"},
+
+    {"key": "client_legal_address", "label": "Юридический адрес", "type": "textarea", "placeholder": "199178, г. Санкт-Петербург, пр. Средний В.О., дом 65, лит. А, офис Э/ПОМ/Ч.П. 1/2-Н/2"},
+    {"key": "client_actual_address", "label": "Фактический адрес", "type": "textarea", "placeholder": "197375, г. Санкт-Петербург, ул. Маршала Новикова, д. 28, корп. 2, лит. А"},
+
+    {"key": "client_inn", "label": "ИНН", "placeholder": "7801121793"},
+    {"key": "client_kpp", "label": "КПП", "placeholder": "780101001"},
+    {"key": "client_ogrn", "label": "ОГРН", "placeholder": "1037800002426"},
+    {"key": "client_account", "label": "Расчётный счёт", "placeholder": "40702810755070001360"},
+    {"key": "client_bank", "label": "Банк", "placeholder": "ПАО Сбербанк"},
+    {"key": "client_corr_account", "label": "Корреспондентский счёт", "placeholder": "30101810500000000653"},
+    {"key": "client_bik", "label": "БИК", "placeholder": "044030653"},
+    {"key": "client_email", "label": "E-mail (общий, в реквизитах)", "placeholder": "office@aloea.ru"},
+
+    {"key": "spec_contact_name", "label": "Контактное лицо в спецификации", "placeholder": "Петр"},
+    {"key": "spec_contact_phone", "label": "Телефон контактного лица (можно пустым)", "placeholder": "", "required": false},
+    {"key": "spec_contact_email", "label": "E-mail контактного лица", "placeholder": "Gnilobokov.petr@bsspharm.ru"},
+
+    {"key": "service_address", "label": "Адрес обслуживания (полный, в спецификации)", "type": "textarea", "placeholder": "Аптека на трамвайном (А-235/29). Контактное лицо на точке: Королева Ольга Викторовна, +79500391582", "hint": "Адрес/название точки + контакт на месте"},
+    {"key": "service_address_short", "label": "Адрес для таблицы Акта (короче)", "placeholder": "Аптека на трамвайном (А-235/29)"}
+  ],
+
+  "_note": "Каждое правило заменяет ВЕСЬ узел <w:t>...</w:t>. Поля в виде {{key}} подставляются. count=null — заменить все вхождения; число — ровно столько (валидация).",
+
+  "replacements": [
+    {"find": "<w:t xml:space=\"preserve\"> 02/0426 </w:t>", "replace": "<w:t xml:space=\"preserve\"> {{contract_number}} </w:t>", "count": null},
+    {"find": "<w:t xml:space=\"preserve\">02/0426 </w:t>", "replace": "<w:t xml:space=\"preserve\">{{contract_number}} </w:t>", "count": null},
+    {"find": "<w:t>от «2» апреля 2026г.</w:t>", "replace": "<w:t>от «{{contract_day}}» {{contract_month}} {{contract_year}}г.</w:t>", "count": 1},
+    {"find": "<w:t>от «2» апреля 2026г. (далее – Договор), о нижеследующем:</w:t>", "replace": "<w:t>от «{{contract_day}}» {{contract_month}} {{contract_year}}г. (далее – Договор), о нижеследующем:</w:t>", "count": 1},
+    {"find": "<w:t>от «2» апреля 2026г</w:t>", "replace": "<w:t>от «{{contract_day}}» {{contract_month}} {{contract_year}}г</w:t>", "count": null},
+
+    {"find": "<w:t xml:space=\"preserve\">Общество с ограниченной ответственностью «МедикоМ» </w:t>", "replace": "<w:t xml:space=\"preserve\">{{client_full_name}} </w:t>", "count": 1},
+    {"find": "<w:t>в лице Быковой Анны Алексеевны, именуемое в дальнейшем «Абонент», с другой стороны, каждое в отдельности именуемое – Сторона, совместно именуемые – Стороны, заключили настоящий договор</w:t>", "replace": "<w:t>{{client_signatory_clause}}, именуемое в дальнейшем «Абонент», с другой стороны, каждое в отдельности именуемое – Сторона, совместно именуемые – Стороны, заключили настоящий договор</w:t>", "count": 1},
+
+    {"find": "<w:t>ООО «МедикоМ»</w:t>", "replace": "<w:t>{{client_short_name}}</w:t>", "count": null},
+    {"find": "<w:t>ООО «Медиком»</w:t>", "replace": "<w:t>{{client_short_name}}</w:t>", "count": null},
+    {"find": "<w:t xml:space=\"preserve\">ООО «Медиком» </w:t>", "replace": "<w:t xml:space=\"preserve\">{{client_short_name}} </w:t>", "count": null},
+
+    {"find": "<w:t>163001, Архангельская область, г.о. город Архангельск, г. Архангельск, пр-кт Троицкий, д. 121, к. 1, пом. 15-Н</w:t>", "replace": "<w:t>{{client_legal_address}}</w:t>", "count": 1},
+    {"find": "<w:t>163001, Архангельская область, г.о. город Архангельск, г. Архангельск, пр-кт Троицкий, д. 121, к. 1, помещ. 15-Н</w:t>", "replace": "<w:t>{{client_actual_address}}</w:t>", "count": 1},
+
+    {"find": "<w:t>ИНН 2905003266</w:t>", "replace": "<w:t>ИНН {{client_inn}}</w:t>", "count": 1},
+    {"find": "<w:t>КПП -</w:t>", "replace": "<w:t xml:space=\"preserve\">КПП </w:t>", "count": 1},
+    {"find": "<w:t>290501001</w:t>", "replace": "<w:t>{{client_kpp}}</w:t>", "count": 1},
+    {"find": "<w:t>1022901141735</w:t>", "replace": "<w:t>{{client_ogrn}}</w:t>", "count": 1},
+
+    {"find": "<w:t>р/с 40702810004240100361</w:t>", "replace": "<w:t>р/с {{client_account}}</w:t>", "count": 1},
+    {"find": "<w:t>Банк: ПАО Сбербанк</w:t>", "replace": "<w:t>Банк: {{client_bank}}</w:t>", "count": 1},
+    {"find": "<w:t>30101810100000000601</w:t>", "replace": "<w:t>{{client_corr_account}}</w:t>", "count": 1},
+    {"find": "<w:t>041117601</w:t>", "replace": "<w:t>{{client_bik}}</w:t>", "count": 1},
+    {"find": "<w:t>E-mail: antey_natalya@mail.ru</w:t>", "replace": "<w:t>E-mail: {{client_email}}</w:t>", "count": 1},
+
+    {"find": "<w:t>________________________ /Быкова А.А.</w:t>", "replace": "<w:t>________________________ /{{client_signatory_short}}</w:t>", "count": null},
+
+    {"find": "<w:t>Спецификация на предоставление доступа к сети интернет № 1 от 2 апреля 2026 г.</w:t>", "replace": "<w:t>Спецификация на предоставление доступа к сети интернет № 1 от {{contract_day}} {{contract_month}} {{contract_year}} г.</w:t>", "count": 1},
+
+    {"find": "<w:t>Контактное лицо: Быкова Анна Алексеевна</w:t>", "replace": "<w:t>Контактное лицо: {{spec_contact_name}}</w:t>", "count": 1},
+    {"find": "<w:t>88172538140</w:t>", "replace": "<w:t>{{spec_contact_phone}}</w:t>", "count": 1},
+    {"find": "<w:t xml:space=\"preserve\"> (504) Факс: </w:t>", "replace": "<w:t xml:space=\"preserve\"> Факс: </w:t>", "count": 1},
+    {"find": "<w:t>antey_natalya@mail.ru</w:t>", "replace": "<w:t>{{spec_contact_email}}</w:t>", "count": 1},
+
+    {"find": "<w:t>Адрес обслуживания: г. Архангельск Московский пр-кт д. 2 корп. 1</w:t>", "replace": "<w:t>Адрес обслуживания: {{service_address}}</w:t>", "count": 1},
+
+    {"find": "<w:t>________________________ / Быкова А.А.</w:t>", "replace": "<w:t>________________________ / {{client_signatory_short}}</w:t>", "count": null},
+
+    {"find": "<w:t>Жаров В.И./</w:t>", "replace": "<w:t>{{client_signatory_short}}/</w:t>", "count": 1},
+
+    {"find": "<w:t>АКТ от «02» апреля 2026 г.</w:t>", "replace": "<w:t>АКТ от «{{act_day_padded}}» {{contract_month}} {{contract_year}} г.</w:t>", "count": 1},
+    {"find": "<w:t>г. Москва</w:t>", "replace": "<w:t>г. {{act_city}}</w:t>", "count": 1, "comment": "Город составления Акта — параметризовали"},
+    {"find": "<w:t>, Спецификации № 1 от 02.04.2026г. к нему, Айсистемс сдал, а Абонент принял в эксплуатацию нижеперечисленные услуги:</w:t>", "replace": "<w:t>, Спецификации № 1 от {{act_date_short}}г. к нему, Айсистемс сдал, а Абонент принял в эксплуатацию нижеперечисленные услуги:</w:t>", "count": 1},
+    {"find": "<w:t>г. Архангельск Московский пр-кт д. 2 корп. 1</w:t>", "replace": "<w:t>{{service_address_short}}</w:t>", "count": 1},
+    {"find": "<w:t>07.04.2026</w:t>", "replace": "<w:t>{{service_start_date}}</w:t>", "count": 1},
+
+    {"find": "<w:t>Быкова А.А.</w:t>", "replace": "<w:t>{{client_signatory_short}}</w:t>", "count": null},
+    {"find": "<w:t>Быкова А.А</w:t>", "replace": "<w:t>{{client_signatory_short_no_dot}}</w:t>", "count": null}
+  ],
+
+  "computed_fields": [
+    {"key": "client_signatory_short_no_dot", "from_field": "client_signatory_short", "transform": "strip_trailing_dot"}
+  ]
+}

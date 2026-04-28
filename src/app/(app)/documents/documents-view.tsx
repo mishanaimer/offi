@@ -6,12 +6,17 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Copy, Plus, Trash2, FileText, Sparkles } from "lucide-react";
+import { ContractGeneratorView } from "./contract-generator-view";
+import { cn } from "@/lib/utils";
 
 type Template = { id: string; name: string; body: string; created_at: string };
 type Client = { id: string; name: string; contact: string | null; email: string | null; phone: string | null };
 
+type Mode = "text" | "docx";
+
 export function DocumentsView({ templates, clients }: { templates: Template[]; clients: Client[] }) {
   const router = useRouter();
+  const [mode, setMode] = useState<Mode>("text");
   const [adding, setAdding] = useState(false);
   const [selectedId, setSelectedId] = useState(templates[0]?.id ?? null);
   const [clientId, setClientId] = useState<string>(clients[0]?.id ?? "");
@@ -38,11 +43,60 @@ export function DocumentsView({ templates, clients }: { templates: Template[]; c
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
-      <header className="h-16 glass border-b border-border/60 px-4 md:px-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Документы</h1>
-        <Button size="sm" onClick={() => setAdding(true)}><Plus className="w-4 h-4" /> Новый шаблон</Button>
+      <header className="h-16 glass border-b border-border/60 px-4 md:px-6 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <h1 className="text-lg font-semibold shrink-0">Документы</h1>
+          <div className="hidden sm:flex items-center gap-1 bg-muted/60 rounded-xl p-1">
+            <button
+              onClick={() => setMode("text")}
+              className={cn(
+                "h-8 px-3 rounded-lg text-xs font-medium transition",
+                mode === "text" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Текстовые шаблоны
+            </button>
+            <button
+              onClick={() => setMode("docx")}
+              className={cn(
+                "h-8 px-3 rounded-lg text-xs font-medium transition",
+                mode === "docx" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Договоры (.docx)
+            </button>
+          </div>
+        </div>
+        {mode === "text" && (
+          <Button size="sm" onClick={() => setAdding(true)}><Plus className="w-4 h-4" /> Новый шаблон</Button>
+        )}
       </header>
 
+      {/* Mobile mode switcher */}
+      <div className="sm:hidden border-b border-border/60 px-4 py-2 flex gap-1 bg-muted/30">
+        <button
+          onClick={() => setMode("text")}
+          className={cn(
+            "flex-1 h-8 rounded-lg text-xs font-medium transition",
+            mode === "text" ? "bg-background shadow-sm" : "text-muted-foreground"
+          )}
+        >
+          Шаблоны
+        </button>
+        <button
+          onClick={() => setMode("docx")}
+          className={cn(
+            "flex-1 h-8 rounded-lg text-xs font-medium transition",
+            mode === "docx" ? "bg-background shadow-sm" : "text-muted-foreground"
+          )}
+        >
+          Договоры (.docx)
+        </button>
+      </div>
+
+      {mode === "docx" ? (
+        <ContractGeneratorView />
+      ) : (
       <div className="flex-1 overflow-hidden grid md:grid-cols-[280px_1fr]">
         {/* templates list */}
         <aside className="border-r border-border/60 overflow-y-auto md:min-h-0">
@@ -131,6 +185,7 @@ export function DocumentsView({ templates, clients }: { templates: Template[]; c
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

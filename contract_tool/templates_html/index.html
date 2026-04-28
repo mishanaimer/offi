@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Шаблоны · Контракт-генератор{% endblock %}
+{% block crumbs %}{% endblock %}
+
+{% block content %}
+<h1>Шаблоны<br>договоров</h1>
+<p class="lede">Выбери шаблон. Заполни реквизиты вручную или вставь карточку контрагента — поля подтянутся автоматически.</p>
+
+<div class="templates">
+  {% for tpl in templates %}
+    <a href="/fill/{{ tpl.id }}" class="template-link">
+      <div class="card">
+        <h3>{{ tpl.name }}</h3>
+        <p>{{ tpl.description }}</p>
+      </div>
+    </a>
+  {% endfor %}
+</div>
+{% endblock %}

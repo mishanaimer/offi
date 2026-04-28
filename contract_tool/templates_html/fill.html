@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}{{ config.name }} · Заполнение{% endblock %}
+{% block crumbs %}<a href="/">Шаблоны</a> &nbsp;/&nbsp; {{ config.name }}{% endblock %}
+
+{% block content %}
+{% set fields_by_key = {} %}
+{% for f in config.fields %}{% set _ = fields_by_key.update({f.key: f}) %}{% endfor %}
+
+{% macro render_field(key) %}
+  {% set f = fields_by_key[key] %}
+  {% if f %}
+  <div class="field">
+    <label for="f_{{ f.key }}">{{ f.label }}</label>
+    {% if f.type == 'textarea' %}
+      <textarea name="{{ f.key }}" id="f_{{ f.key }}" placeholder="{{ f.placeholder|default('', true) }}"></textarea>
+    {% else %}
+      <input type="text" name="{{ f.key }}" id="f_{{ f.key }}" placeholder="{{ f.placeholder|default('', true) }}">
+    {% endif %}
+    {% if f.hint %}<div class="hint">{{ f.hint }}</div>{% endif %}
+  </div>
+  {% endif %}
+{% endmacro %}
+
+<h1 style="font-size: 32px;">{{ config.name }}</h1>
+<p class="lede">{{ config.description }}</p>
+
+<!-- Парсер реквизитов -->
+<div class="paste-area">
+  <div class="row">
+    <span class="label">Распознать реквизиты из текста</span>
+    <span class="desc">Вставь карточку контрагента — ИНН, КПП, ОГРН, счета и адреса заполнятся сами</span>
+  </div>
+  <textarea id="paste-input" placeholder="Например:&#10;ООО «АЛОЭ»&#10;ИНН 7814293260, КПП 781401001, ОГРН 1157847365015&#10;р/с 40702810055070003990 в ПАО Сбербанк&#10;к/с 30101810500000000653, БИК 044030653&#10;Юридический адрес: 197375, г. Санкт-Петербург, ул. Маршала Новикова..."></textarea>
+  <div>
+    <button class="btn btn-ghost parse-btn" onclick="parseFromText()">Распознать и заполнить</button>
+    <span class="parse-status" id="parse-status"></span>
+  </div>
+</div>
+
+<form id="contract-form" autocomplete="off" onsubmit="event.preventDefault(); generatePreview();">
+
+  <!-- Группа 1: Договор -->
+  <div class="form-section">
+    <div class="form-section-title">Договор</div>
+    <div class="field-row">
+      {{ render_field('contract_number') }}
+      {{ render_field('contract_day') }}
+    </div>
+    <div class="field-row">
+      {{ render_field('contract_month') }}
+      {{ render_field('contract_year') }}
+    </div>
+    <div class="field-row">
+      {{ render_field('act_date_short') }}
+      {{ render_field('act_day_padded') }}
+    </div>
+    <div class="field-row">
+      {{ render_field('act_city') }}
+      {{ render_field('service_start_date') }}
+    </div>
+  </div>
+
+  <!-- Группа 2: Абонент -->
+  <div class="form-section">
+    <div class="form-section-title">Абонент — основные данные</div>
+    {{ render_field('client_full_name') }}
+    {{ render_field('client_short_name') }}
+    {{ render_field('client_signatory_clause') }}
+    <div class="field-row">
+      {{ render_field('client_signatory_short') }}
+      {{ render_field('client_signatory_title') }}
+    </div>
+    {{ render_field('client_legal_address') }}
+    {{ render_field('client_actual_address') }}
+  </div>
+
+  <!-- Группа 3: Реквизиты -->
+  <div class="form-section">
+    <div class="form-section-title">Банковские и налоговые реквизиты</div>
+    <div class="field-row">
+      {{ render_field('client_inn') }}
+      {{ render_field('client_kpp') }}
+    </div>
+    {{ render_field('client_ogrn') }}
+    {{ render_field('client_bank') }}
+    <div class="field-row">
+      {{ render_field('client_account') }}
+      {{ render_field('client_corr_account') }}
+    </div>
+    <div class="field-row">
+      {{ render_field('client_bik') }}
+      {{ render_field('client_email') }}
+    </div>
+  </div>
+
+  <!-- Группа 4: Спецификация / точка -->
+  <div class="form-section">
+    <div class="form-section-title">Спецификация и точка подключения</div>
+    <div class="field-row">
+      {{ render_field('spec_contact_name') }}
+      {{ render_field('spec_contact_phone') }}
+    </div>
+    {{ render_field('spec_contact_email') }}
+    {{ render_field('service_address') }}
+    {{ render_field('service_address_short') }}
+  </div>
+
+  <!-- Sticky bar -->
+  <div class="actions-bar">
+    <button class="btn btn-primary" type="submit" id="generate-btn">
+      Сгенерировать договор
+    </button>
+    <a href="/" class="btn btn-ghost">Отмена</a>
+    <span style="color: var(--ink-mute); font-size: 12px; margin-left: 8px;" id="form-status"></span>
+  </div>
+</form>
+
+<!-- Modal preview -->
+<div class="modal" id="preview-modal">
+  <div class="modal-inner">
+    <div class="modal-header">
+      <h2>Превью договора</h2>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div id="warnings-block"></div>
+      <div class="preview-pane" id="preview-content"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Закрыть</button>
+      <a class="btn btn-primary" id="download-link" href="#">Скачать .docx</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const FIELDS = {{ fields_json | safe }};
+const TEMPLATE_ID = "{{ template_id }}";
+
+async function parseFromText() {
+  const text = document.getElementById('paste-input').value.trim();
+  const status = document.getElementById('parse-status');
+  if (!text) {
+    status.textContent = 'Сначала вставь текст';
+    status.className = 'parse-status warn';
+    return;
+  }
+  status.textContent = 'Распознаю...';
+  status.className = 'parse-status';
+  try {
+    const r = await fetch('/parse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})
+    });
+    const data = await r.json();
+    let filled = 0;
+    for (const key in data) {
+      const inp = document.querySelector(`[name="${key}"]`);
+      if (inp) {
+        inp.value = data[key];
+        filled++;
+      }
+    }
+    status.textContent = `✓ Заполнено полей: ${filled}`;
+    status.className = 'parse-status';
+  } catch(e) {
+    status.textContent = 'Ошибка: ' + e.message;
+    status.className = 'parse-status err';
+  }
+}
+
+async function generatePreview() {
+  const btn = document.getElementById('generate-btn');
+  const formStatus = document.getElementById('form-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Генерирую…';
+  formStatus.textContent = '';
+
+  // Собираем данные
+  const data = {};
+  for (const f of FIELDS) {
+    const inp = document.querySelector(`[name="${f.key}"]`);
+    if (inp) data[f.key] = inp.value;
+  }
+
+  try {
+    const r = await fetch('/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({template_id: TEMPLATE_ID, data})
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(errText);
+    }
+    const result = await r.json();
+
+    // Показываем модалку
+    document.getElementById('preview-content').innerHTML = result.html_preview;
+    const wb = document.getElementById('warnings-block');
+    if (result.warnings && result.warnings.length) {
+      wb.innerHTML = `<div class="warnings"><strong>⚠ Предупреждения (${result.warnings.length}):</strong><ul>${result.warnings.map(w => `<li>${w}</li>`).join('')}</ul></div>`;
+    } else {
+      wb.innerHTML = '';
+    }
+    document.getElementById('download-link').href = `/download/${result.id}`;
+    document.getElementById('preview-modal').classList.add('open');
+  } catch(e) {
+    formStatus.textContent = 'Ошибка генерации: ' + e.message;
+    formStatus.style.color = 'var(--accent)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Сгенерировать договор';
+  }
+}
+
+function closeModal() {
+  document.getElementById('preview-modal').classList.remove('open');
+}
+
+// Сохранение в localStorage (чтобы не терять данные при F5)
+const STORAGE_KEY = 'contract_form_' + TEMPLATE_ID;
+function saveForm() {
+  const data = {};
+  for (const f of FIELDS) {
+    const inp = document.querySelector(`[name="${f.key}"]`);
+    if (inp) data[f.key] = inp.value;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+function loadForm() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    for (const key in saved) {
+      const inp = document.querySelector(`[name="${key}"]`);
+      if (inp && saved[key]) inp.value = saved[key];
+    }
+  } catch(e) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadForm();
+  document.querySelectorAll('input, textarea').forEach(el => {
+    el.addEventListener('input', saveForm);
+  });
+});
+</script>
+{% endblock %}
