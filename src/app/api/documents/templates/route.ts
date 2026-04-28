@@ -4,7 +4,6 @@ import { createClient } from "@/lib/supabase/server";
 import {
   createCompanyTemplate,
   listCompanyTemplates,
-  listSystemTemplates,
 } from "@/lib/contract-generator/registry";
 import { mergeRunsInDocumentXml } from "@/lib/contract-generator/merge-runs";
 import { analyzeAndBuildTemplate } from "@/lib/contract-generator/ai-analyze";
@@ -15,22 +14,18 @@ export const maxDuration = 120;
 export async function GET() {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return Response.json({ templates: [] });
 
-  const system = await listSystemTemplates();
-  if (!user) {
-    return Response.json({ templates: system });
-  }
   const { data: profile } = await supabase
     .from("users")
     .select("company_id")
     .eq("id", user.id)
     .single();
   const companyId = profile?.company_id as string | undefined;
-  if (!companyId) {
-    return Response.json({ templates: system });
-  }
-  const custom = await listCompanyTemplates(companyId);
-  return Response.json({ templates: [...system, ...custom] });
+  if (!companyId) return Response.json({ templates: [] });
+
+  const templates = await listCompanyTemplates(companyId);
+  return Response.json({ templates });
 }
 
 export async function POST(req: NextRequest) {

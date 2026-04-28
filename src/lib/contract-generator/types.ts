@@ -31,17 +31,11 @@ export interface ContractConfig {
   computed_fields?: ComputedField[];
 }
 
-/** Источник шаблона: bundled (системный, в репо) или custom (загружен компанией). */
-export type TemplateSource = "system" | "custom";
-
 export interface ContractTemplateMeta {
   id: string;
   name: string;
   description: string;
-  source: TemplateSource;
-  /** Только для custom: для возможности удаления. */
   canDelete?: boolean;
-  /** Только для custom: предупреждения, найденные при ИИ-анализе. */
   warnings?: string[];
   createdAt?: string;
 }

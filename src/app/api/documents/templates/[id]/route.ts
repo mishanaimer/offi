@@ -24,7 +24,6 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       id: meta.id,
       name: meta.name,
       description: meta.description,
-      source: meta.source,
       canDelete: meta.canDelete,
       warnings: meta.warnings ?? [],
       fields,

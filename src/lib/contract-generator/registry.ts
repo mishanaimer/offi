@@ -1,57 +1,10 @@
-import path from "path";
-import fs from "fs/promises";
+// Реестр шаблонов договоров. Сейчас все шаблоны — пользовательские:
+// компания загружает свой .docx, ИИ делает из него заполняемый шаблон,
+// шаблон сохраняется в БД (`contract_templates`) и Storage (`contract-templates`).
 import type { ContractConfig, ContractTemplateMeta } from "./types";
 import { createServiceClient } from "@/lib/supabase/server";
 
-// === Системные (bundled) шаблоны ===
-//
-// Лежат в репо, видны всем компаниям, удалить нельзя. Сейчас один — Айсистемс.
-// Добавить новый: положить .docx + .json в templates/, добавить id в SYSTEM_IDS.
-
-const TEMPLATES_DIR = path.join(process.cwd(), "src", "lib", "contract-generator", "templates");
-const SYSTEM_IDS = ["aisystems_internet"] as const;
-
-export const SYSTEM_PREFIX = "system:";
-
-function isSystemId(id: string): boolean {
-  return id.startsWith(SYSTEM_PREFIX);
-}
-
-function bareSystemId(id: string): string {
-  return id.startsWith(SYSTEM_PREFIX) ? id.slice(SYSTEM_PREFIX.length) : id;
-}
-
-async function loadSystemConfig(bareId: string): Promise<ContractConfig> {
-  const raw = await fs.readFile(path.join(TEMPLATES_DIR, `${bareId}.json`), "utf-8");
-  return JSON.parse(raw) as ContractConfig;
-}
-
-async function loadSystemTemplateBuffer(cfg: ContractConfig): Promise<Buffer> {
-  return fs.readFile(path.join(TEMPLATES_DIR, cfg.docx_file));
-}
-
-export async function listSystemTemplates(): Promise<ContractTemplateMeta[]> {
-  const out: ContractTemplateMeta[] = [];
-  for (const id of SYSTEM_IDS) {
-    try {
-      const cfg = await loadSystemConfig(id);
-      out.push({
-        id: SYSTEM_PREFIX + id,
-        name: cfg.name,
-        description: cfg.description,
-        source: "system",
-        canDelete: false,
-      });
-    } catch {
-      // если файл-конфиг битый/отсутствует — просто пропускаем
-    }
-  }
-  return out;
-}
-
-// === Кастомные (БД + Storage) шаблоны ===
-
-const STORAGE_BUCKET = "contract-templates";
+export const STORAGE_BUCKET = "contract-templates";
 
 interface DbTemplateRow {
   id: string;
@@ -77,7 +30,6 @@ export async function listCompanyTemplates(companyId: string): Promise<ContractT
     id: r.id as string,
     name: r.name as string,
     description: (r.description as string) ?? "",
-    source: "custom" as const,
     canDelete: true,
     warnings: Array.isArray(r.warnings) ? (r.warnings as string[]) : [],
     createdAt: r.created_at as string,
@@ -94,25 +46,6 @@ export async function resolveTemplate(
   id: string,
   companyId: string | null
 ): Promise<ResolvedTemplate> {
-  if (isSystemId(id)) {
-    const bare = bareSystemId(id);
-    if (!SYSTEM_IDS.includes(bare as any)) {
-      throw new Error(`Системный шаблон не найден: ${bare}`);
-    }
-    const config = await loadSystemConfig(bare);
-    const templateBuffer = await loadSystemTemplateBuffer(config);
-    return {
-      meta: {
-        id,
-        name: config.name,
-        description: config.description,
-        source: "system",
-        canDelete: false,
-      },
-      config,
-      templateBuffer,
-    };
-  }
   if (!companyId) throw new Error("Не определена компания пользователя");
 
   const service = createServiceClient();
@@ -146,7 +79,6 @@ export async function resolveTemplate(
       id: t.id,
       name: t.name,
       description: t.description ?? "",
-      source: "custom",
       canDelete: true,
       warnings: Array.isArray(t.warnings) ? (t.warnings as string[]) : [],
       createdAt: t.created_at,
@@ -157,7 +89,6 @@ export async function resolveTemplate(
 }
 
 export async function deleteCompanyTemplate(id: string, companyId: string): Promise<void> {
-  if (isSystemId(id)) throw new Error("Системные шаблоны нельзя удалить");
   const service = createServiceClient();
   const { data: row } = await service
     .from("contract_templates")
@@ -184,8 +115,24 @@ export interface CreateTemplateInput {
   docxBuffer: Buffer;
 }
 
+/** Идемпотентно гарантирует существование bucket. Если permissions
+ *  не позволяют — не падает, просто оставляет ошибку из upload расти. */
+async function ensureBucket(service: ReturnType<typeof createServiceClient>): Promise<void> {
+  try {
+    const { data } = await service.storage.getBucket(STORAGE_BUCKET);
+    if (data) return;
+  } catch {}
+  try {
+    await service.storage.createBucket(STORAGE_BUCKET, { public: false });
+  } catch {
+    // bucket мог быть создан параллельным запросом — это нормально
+  }
+}
+
 export async function createCompanyTemplate(input: CreateTemplateInput): Promise<{ id: string; storagePath: string }> {
   const service = createServiceClient();
+
+  await ensureBucket(service);
 
   const { data: row, error: insertErr } = await service
     .from("contract_templates")
@@ -203,7 +150,15 @@ export async function createCompanyTemplate(input: CreateTemplateInput): Promise
     })
     .select("id")
     .single();
-  if (insertErr || !row) throw new Error(insertErr?.message ?? "Не удалось создать шаблон");
+  if (insertErr || !row) {
+    const msg = insertErr?.message ?? "Не удалось создать шаблон";
+    if (msg.includes("contract_templates")) {
+      throw new Error(
+        "Таблица contract_templates ещё не создана. Примени миграцию supabase/migrations/0010_contract_templates.sql в SQL Editor Supabase."
+      );
+    }
+    throw new Error(msg);
+  }
 
   const storagePath = `${input.companyId}/${row.id}.docx`;
   const { error: upErr } = await service.storage

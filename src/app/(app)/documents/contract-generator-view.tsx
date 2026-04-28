@@ -3,13 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
-import { Download, FileText, Lock, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
+import { Download, FileText, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
 
 type TemplateMeta = {
   id: string;
   name: string;
   description: string;
-  source: "system" | "custom";
   canDelete?: boolean;
   warnings?: string[];
   createdAt?: string;
@@ -35,7 +34,6 @@ type TemplateDetails = {
   id: string;
   name: string;
   description: string;
-  source: "system" | "custom";
   canDelete: boolean;
   warnings: string[];
   fields: FieldDef[];
@@ -143,9 +141,6 @@ export function ContractGeneratorView() {
 
   const groupedFields = useMemo(() => (details ? groupFields(details.fields) : []), [details]);
 
-  const systemTemplates = templates.filter((t) => t.source === "system");
-  const customTemplates = templates.filter((t) => t.source === "custom");
-
   async function handleParse() {
     const text = pasteText.trim();
     if (!text) {
@@ -218,6 +213,8 @@ export function ContractGeneratorView() {
     URL.revokeObjectURL(url);
   }
 
+  const [needsMigration, setNeedsMigration] = useState(false);
+
   async function handleUpload(file: File) {
     if (!file.name.toLowerCase().endsWith(".docx")) {
       setUploadStatus("Принимаются только .docx");
@@ -225,6 +222,7 @@ export function ContractGeneratorView() {
     }
     setUploading(true);
     setUploadStatus("Загружаю и анализирую договор… (10–30 сек)");
+    setNeedsMigration(false);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -234,6 +232,7 @@ export function ContractGeneratorView() {
       });
       if (!r.ok) {
         const t = await r.text();
+        if (t.includes("contract_templates")) setNeedsMigration(true);
         throw new Error(t || "Ошибка загрузки");
       }
       const j = (await r.json()) as {
@@ -317,50 +316,38 @@ export function ContractGeneratorView() {
               {uploadStatus}
             </div>
           )}
+          {needsMigration && (
+            <div className="mt-2 rounded-lg bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-300/60 p-2.5 text-[11px] space-y-1.5">
+              <div className="font-medium">База ещё не настроена</div>
+              <div className="text-muted-foreground leading-relaxed">
+                Чтобы заработала загрузка шаблонов, открой Supabase → SQL Editor и выполни
+                миграцию <code className="bg-muted px-1 rounded">supabase/migrations/0010_contract_templates.sql</code>{" "}
+                из репозитория. Она создаст таблицы и приватный bucket для файлов.
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto">
           {loadingList ? (
             <div className="p-4 text-sm text-muted-foreground">Загружаю шаблоны…</div>
+          ) : templates.length === 0 ? (
+            <div className="p-4 text-xs text-muted-foreground leading-relaxed">
+              Пока нет шаблонов. Загрузи .docx-договор — ИИ найдёт в нём переменные части
+              (контрагент, реквизиты, даты, подписант) и сделает заполняемый шаблон.
+            </div>
           ) : (
-            <>
-              {systemTemplates.length > 0 && (
-                <div className="p-3 space-y-1">
-                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                    Системные
-                  </div>
-                  {systemTemplates.map((t) => (
-                    <TemplateRow
-                      key={t.id}
-                      t={t}
-                      selected={selectedId === t.id}
-                      onSelect={() => setSelectedId(t.id)}
-                    />
-                  ))}
-                </div>
-              )}
-              {customTemplates.length > 0 && (
-                <div className="p-3 space-y-1 border-t border-border/40">
-                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                    Свои шаблоны
-                  </div>
-                  {customTemplates.map((t) => (
-                    <TemplateRow
-                      key={t.id}
-                      t={t}
-                      selected={selectedId === t.id}
-                      onSelect={() => setSelectedId(t.id)}
-                      onDelete={() => handleDelete(t.id)}
-                    />
-                  ))}
-                </div>
-              )}
-              {systemTemplates.length === 0 && customTemplates.length === 0 && (
-                <div className="p-4 text-sm text-muted-foreground">
-                  Нет шаблонов. Загрузи первый .docx сверху.
-                </div>
-              )}
-            </>
+            <div className="p-3 space-y-1">
+              {templates.map((t) => (
+                <TemplateRow
+                  key={t.id}
+                  t={t}
+                  selected={selectedId === t.id}
+                  onSelect={() => setSelectedId(t.id)}
+                  onDelete={() => handleDelete(t.id)}
+                />
+              ))}
+            </div>
           )}
         </div>
       </aside>
@@ -376,9 +363,6 @@ export function ContractGeneratorView() {
           ) : (
             <>
               <div>
-                <div className="text-xs text-muted-foreground">
-                  {details.source === "system" ? "Системный шаблон" : "Свой шаблон"}
-                </div>
                 <h2 className="text-xl font-semibold">{details.name}</h2>
                 {details.description && (
                   <p className="text-sm text-muted-foreground mt-1">{details.description}</p>
@@ -554,11 +538,7 @@ function TemplateRow({
       }`}
       onClick={onSelect}
     >
-      {t.source === "system" ? (
-        <Lock className="w-3.5 h-3.5 mt-1 text-muted-foreground shrink-0" />
-      ) : (
-        <FileText className="w-3.5 h-3.5 mt-1 text-muted-foreground shrink-0" />
-      )}
+      <FileText className="w-3.5 h-3.5 mt-1 text-muted-foreground shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate flex items-center gap-1.5">
           {t.name}

@@ -59,10 +59,14 @@ create policy generated_contracts_rw on public.generated_contracts for all
   with check (company_id = public.current_company_id());
 
 -- =======================================================================
--- Storage bucket "contract-templates" (private). Создаётся вручную
--- через Dashboard или supabase CLI. RLS-политики ниже.
--- Структура: <company_id>/<template_id>.docx
+-- Storage bucket "contract-templates" (private). Создаётся автоматически
+-- этой миграцией. RLS-политики ниже.
+-- Структура файлов: <company_id>/<template_id>.docx
 -- =======================================================================
+
+insert into storage.buckets (id, name, public)
+values ('contract-templates', 'contract-templates', false)
+on conflict (id) do nothing;
 
 drop policy if exists "contract_templates_select" on storage.objects;
 drop policy if exists "contract_templates_insert" on storage.objects;
