@@ -225,6 +225,17 @@
 .docx-preview-host .docx {
   color: #1f1f1f;
 }
+.docx-preview-host[contenteditable="true"]:focus,
+.docx-preview-host.is-editing:focus,
+.docx-preview-host.is-editing *:focus {
+  outline: none;
+}
+.docx-preview-host.is-editing {
+  caret-color: hsl(var(--primary));
+}
+.docx-preview-host.is-editing .docx-wrapper > section.docx {
+  box-shadow: 0 0 0 2px hsla(219, 100%, 55%, 0.25), 0 4px 24px rgba(0, 0, 0, 0.08);
+}
 /* Карточки полей внутри превью (вместо литеральных {{key}}) */
 .tpl-placeholder {
   display: inline-flex;

@@ -3,7 +3,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
-import { Download, Eye, FileText, Pencil, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
+import {
+  Bold,
+  Download,
+  Eye,
+  FileText,
+  Italic,
+  Pencil,
+  Redo2,
+  Sparkles,
+  Trash2,
+  Underline,
+  Undo2,
+  Upload,
+  Wand2,
+  X,
+} from "lucide-react";
 
 type TemplateMeta = {
   id: string;
@@ -93,10 +108,10 @@ export function ContractGeneratorView() {
   const [templatePlainText, setTemplatePlainText] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editingText, setEditingText] = useState<string>("");
   const [savingText, setSavingText] = useState(false);
   const [textEditStatus, setTextEditStatus] = useState<string | null>(null);
   const previewMountRef = useRef<HTMLDivElement | null>(null);
+  const editSnapshotRef = useRef<string>("");
   const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState<string>("");
 
@@ -389,22 +404,40 @@ export function ContractGeneratorView() {
     setEditingFieldKey(null);
   }
 
+  // Собирает текст превью с восстановленными {{key}} вместо карточек.
+  function collectPreviewText(root: HTMLElement): string {
+    const clone = root.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(".tpl-placeholder").forEach((ph) => {
+      const key = ph.getAttribute("data-key");
+      if (key) ph.replaceWith(document.createTextNode(`{{${key}}}`));
+    });
+    // innerText сохраняет переносы строк по структуре DOM (paragraphs/breaks)
+    return (clone as HTMLElement).innerText;
+  }
+
   function startEditingText() {
-    if (templatePlainText == null) return;
-    setEditingText(templatePlainText);
+    if (!previewMountRef.current) return;
+    editSnapshotRef.current = collectPreviewText(previewMountRef.current);
     setEditMode(true);
     setTextEditStatus(null);
+    // На следующем кадре включим contentEditable + сфокусируем
+    requestAnimationFrame(() => {
+      if (!previewMountRef.current) return;
+      previewMountRef.current.setAttribute("contenteditable", "true");
+      (previewMountRef.current as HTMLElement).focus();
+    });
   }
 
   function cancelEditingText() {
+    if (previewMountRef.current) {
+      previewMountRef.current.setAttribute("contenteditable", "false");
+    }
     setEditMode(false);
-    setEditingText("");
     setTextEditStatus(null);
+    editSnapshotRef.current = "";
   }
 
-  // Простой построчный диф: для пары (origLine, editedLine) на одинаковом
-  // индексе — если разные, добавляем правило {old, new}. Этого хватает
-  // для типичных правок (поправить опечатку, переписать формулировку).
+  // Простой построчный диф между двумя текстами с восстановленными {{key}}.
   function buildLineEdits(orig: string, edited: string): Array<{ old: string; new: string }> {
     const a = orig.split(/\r?\n/);
     const b = edited.split(/\r?\n/);
@@ -414,18 +447,23 @@ export function ContractGeneratorView() {
       const oa = a[i].trim();
       const ob = b[i].trim();
       if (!oa || oa === ob) continue;
-      // Защита: не сохраняем правки на строках с плейсхолдерами — иначе
-      // сломаем замены полей. Пользователь может удалить плейсхолдер,
-      // редактируя поле через ✎/🗑.
+      // Не трогаем строки с плейсхолдерами — иначе сломаем поля.
       if (oa.includes("{{") || ob.includes("{{")) continue;
       out.push({ old: oa, new: ob });
     }
     return out;
   }
 
+  function execToolbar(cmd: string) {
+    if (!previewMountRef.current) return;
+    (previewMountRef.current as HTMLElement).focus();
+    document.execCommand(cmd, false);
+  }
+
   async function saveEditingText() {
-    if (!selectedId || templatePlainText == null) return;
-    const edits = buildLineEdits(templatePlainText, editingText);
+    if (!selectedId || !previewMountRef.current) return;
+    const edited = collectPreviewText(previewMountRef.current);
+    const edits = buildLineEdits(editSnapshotRef.current, edited);
     if (edits.length === 0) {
       setTextEditStatus("Изменений нет");
       return;
@@ -442,13 +480,15 @@ export function ContractGeneratorView() {
       const j = (await r.json()) as { applied: number; message?: string };
       if (j.applied > 0) {
         setTextEditStatus(`✓ Сохранено правок: ${j.applied}`);
-        // Перерисуем превью + plain-text — там теперь обновлённый шаблон
+        // Перерисуем превью + plain-text
         const pr = await fetch(`/api/documents/templates/${selectedId}/preview`);
         if (pr.ok) {
           const p = (await pr.json()) as { docxBase64: string; plainText?: string };
           setTemplatePreviewBase64(p.docxBase64);
           setTemplatePlainText(p.plainText ?? null);
-          setEditingText(p.plainText ?? "");
+        }
+        if (previewMountRef.current) {
+          previewMountRef.current.setAttribute("contenteditable", "false");
         }
         setEditMode(false);
       } else {
@@ -809,6 +849,30 @@ export function ContractGeneratorView() {
               </div>
             </header>
 
+            {editMode && (
+              <div className="px-3 py-1.5 border-b border-border/60 bg-background flex items-center gap-1">
+                <ToolbarButton title="Жирный (Ctrl+B)" onClick={() => execToolbar("bold")}>
+                  <Bold className="w-4 h-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Курсив (Ctrl+I)" onClick={() => execToolbar("italic")}>
+                  <Italic className="w-4 h-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Подчёркнутый (Ctrl+U)" onClick={() => execToolbar("underline")}>
+                  <Underline className="w-4 h-4" />
+                </ToolbarButton>
+                <div className="w-px h-5 bg-border/60 mx-1" />
+                <ToolbarButton title="Отменить (Ctrl+Z)" onClick={() => execToolbar("undo")}>
+                  <Undo2 className="w-4 h-4" />
+                </ToolbarButton>
+                <ToolbarButton title="Повторить (Ctrl+Y)" onClick={() => execToolbar("redo")}>
+                  <Redo2 className="w-4 h-4" />
+                </ToolbarButton>
+                <div className="ml-auto text-[11px] text-muted-foreground">
+                  Кликни в текст и редактируй прямо здесь. Поля-карточки трогать нельзя — они подставятся при генерации.
+                </div>
+              </div>
+            )}
+
             {textEditStatus && (
               <div
                 className={`px-4 py-2 text-xs border-b border-border/60 bg-background ${
@@ -823,37 +887,18 @@ export function ContractGeneratorView() {
               </div>
             )}
 
-            {editMode ? (
-              <div className="flex-1 overflow-hidden grid lg:grid-cols-2 gap-0 bg-background">
-                <div className="overflow-auto p-4 border-r border-border/60">
-                  <div className="text-xs text-muted-foreground mb-2">
-                    Редактируй текст слева — поля-карточки в превью справа останутся
-                    неизменными. Изменённые строки сохранятся как правила замены в шаблоне.
-                  </div>
-                  <Textarea
-                    value={editingText}
-                    onChange={(e) => setEditingText(e.target.value)}
-                    className="min-h-[60vh] font-mono text-xs leading-relaxed"
-                  />
-                </div>
-                <div className="overflow-auto p-4">
-                  <div className="text-xs text-muted-foreground mb-2">Превью</div>
-                  {templatePreviewBase64 ? (
-                    <div ref={previewMountRef} className="docx-preview-host" />
-                  ) : (
-                    <div className="text-sm text-muted-foreground">Готовлю превью…</div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-auto p-6 flex justify-center">
-                {!templatePreviewBase64 ? (
-                  <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
-                ) : (
-                  <div ref={previewMountRef} className="docx-preview-host" />
-                )}
-              </div>
-            )}
+            <div className="flex-1 overflow-auto p-6 flex justify-center">
+              {!templatePreviewBase64 ? (
+                <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
+              ) : (
+                <div
+                  ref={previewMountRef}
+                  className={`docx-preview-host ${editMode ? "is-editing" : ""}`}
+                  spellCheck={editMode}
+                  suppressContentEditableWarning
+                />
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -956,6 +1001,28 @@ function TemplateRow({
         </button>
       )}
     </div>
+  );
+}
+
+function ToolbarButton({
+  children,
+  onClick,
+  title,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onMouseDown={(e) => e.preventDefault()} // не терять выделение в превью
+      onClick={onClick}
+      className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition"
+    >
+      {children}
+    </button>
   );
 }
 
