@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
-import { Download, FileText, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
+import { Download, Eye, FileText, Pencil, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
 
 type TemplateMeta = {
   id: string;
@@ -35,7 +35,6 @@ type TemplateDetails = {
   name: string;
   description: string;
   canDelete: boolean;
-  warnings: string[];
   fields: FieldDef[];
 };
 
@@ -90,6 +89,11 @@ export function ContractGeneratorView() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [templateHtml, setTemplateHtml] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState<string>("");
+
   async function refreshTemplates(autoSelect?: string) {
     setLoadingList(true);
     try {
@@ -111,8 +115,10 @@ export function ContractGeneratorView() {
   useEffect(() => {
     if (!selectedId) {
       setDetails(null);
+      setTemplateHtml(null);
       return;
     }
+    setTemplateHtml(null);
     fetch(`/api/documents/templates/${selectedId}`)
       .then((r) => {
         if (!r.ok) throw new Error("Не удалось загрузить шаблон");
@@ -126,6 +132,11 @@ export function ContractGeneratorView() {
         setData(initial);
       })
       .catch(() => setDetails(null));
+    // подгружаем превью лениво
+    fetch(`/api/documents/templates/${selectedId}/preview`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((j: { html: string }) => setTemplateHtml(j.html))
+      .catch(() => setTemplateHtml(null));
   }, [selectedId]);
 
   useEffect(() => {
@@ -265,6 +276,29 @@ export function ContractGeneratorView() {
     await refreshTemplates();
   }
 
+  async function persistFields(newFields: FieldDef[]) {
+    if (!details || !selectedId) return;
+    setDetails({ ...details, fields: newFields });
+    await fetch(`/api/documents/templates/${selectedId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: newFields }),
+    });
+  }
+
+  async function handleRemoveField(key: string) {
+    if (!details) return;
+    const newFields = details.fields.filter((f) => f.key !== key);
+    await persistFields(newFields);
+  }
+
+  async function handleRenameField(key: string, newLabel: string) {
+    if (!details) return;
+    const newFields = details.fields.map((f) => (f.key === key ? { ...f, label: newLabel } : f));
+    await persistFields(newFields);
+    setEditingFieldKey(null);
+  }
+
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     const f = e.dataTransfer.files?.[0];
@@ -362,23 +396,22 @@ export function ContractGeneratorView() {
             </div>
           ) : (
             <>
-              <div>
-                <h2 className="text-xl font-semibold">{details.name}</h2>
-                {details.description && (
-                  <p className="text-sm text-muted-foreground mt-1">{details.description}</p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold">{details.name}</h2>
+                  {details.description && (
+                    <p className="text-sm text-muted-foreground mt-1">{details.description}</p>
+                  )}
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Полей: {details.fields.length}
+                  </div>
+                </div>
+                {templateHtml && (
+                  <Button variant="secondary" size="sm" onClick={() => setShowPreview(true)}>
+                    <Eye className="w-4 h-4" /> Посмотреть шаблон
+                  </Button>
                 )}
               </div>
-
-              {details.warnings && details.warnings.length > 0 && (
-                <div className="rounded-xl border border-yellow-300/60 bg-yellow-50 dark:bg-yellow-950/20 p-3 text-xs space-y-1">
-                  <div className="font-medium">⚠ Замечания при анализе шаблона:</div>
-                  <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                    {details.warnings.map((w, i) => (
-                      <li key={i}>{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
 
               {/* Paste-area */}
               <div className="card-surface p-5 space-y-3">
@@ -422,14 +455,67 @@ export function ContractGeneratorView() {
                   <div className="grid sm:grid-cols-2 gap-3">
                     {group.fields.map((f) => {
                       const isTextarea = f.type === "textarea";
+                      const isEditing = editingFieldKey === f.key;
                       return (
                         <div
                           key={f.key}
-                          className={`space-y-1.5 ${isTextarea ? "sm:col-span-2" : ""}`}
+                          className={`space-y-1.5 group/field ${isTextarea ? "sm:col-span-2" : ""}`}
                         >
-                          <label htmlFor={`f_${f.key}`} className="text-xs text-muted-foreground">
-                            {f.label}
-                          </label>
+                          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+                            {isEditing ? (
+                              <div className="flex-1 flex items-center gap-1">
+                                <input
+                                  autoFocus
+                                  value={editingLabel}
+                                  onChange={(e) => setEditingLabel(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleRenameField(f.key, editingLabel);
+                                    if (e.key === "Escape") setEditingFieldKey(null);
+                                  }}
+                                  className="text-xs flex-1 bg-card border border-primary rounded px-1.5 py-0.5 outline-none"
+                                />
+                                <button
+                                  className="text-xs px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground"
+                                  onClick={() => handleRenameField(f.key, editingLabel)}
+                                  title="Сохранить"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  className="text-xs px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground"
+                                  onClick={() => setEditingFieldKey(null)}
+                                  title="Отмена"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <label htmlFor={`f_${f.key}`} className="text-xs text-muted-foreground truncate">
+                                  {f.label}
+                                </label>
+                                <div className="opacity-0 group-hover/field:opacity-100 transition flex items-center gap-0.5 shrink-0">
+                                  <button
+                                    onClick={() => {
+                                      setEditingFieldKey(f.key);
+                                      setEditingLabel(f.label);
+                                    }}
+                                    className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    title="Переименовать"
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleRemoveField(f.key)}
+                                    className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                    title="Удалить поле"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
                           {isTextarea ? (
                             <Textarea
                               id={`f_${f.key}`}
@@ -471,6 +557,38 @@ export function ContractGeneratorView() {
           )}
         </div>
       </div>
+
+      {/* Template preview modal */}
+      {showPreview && templateHtml && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setShowPreview(false)}
+        >
+          <div
+            className="bg-background rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center justify-between p-4 border-b border-border/60">
+              <div>
+                <h2 className="text-lg font-semibold">Шаблон договора</h2>
+                {details && (
+                  <div className="text-xs text-muted-foreground mt-0.5">{details.name}</div>
+                )}
+              </div>
+              <button className="rounded-lg p-1.5 hover:bg-muted" onClick={() => setShowPreview(false)}>
+                <X className="w-4 h-4" />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto p-5">
+              <div
+                className="prose prose-sm max-w-none border border-border rounded-xl p-5 bg-card"
+                // eslint-disable-next-line react/no-danger
+                dangerouslySetInnerHTML={{ __html: templateHtml }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Preview modal */}
       {genResult && (

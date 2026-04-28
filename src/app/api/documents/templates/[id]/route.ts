@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { deleteCompanyTemplate, getTemplateDetails } from "@/lib/contract-generator/registry";
 
 export const runtime = "nodejs";
@@ -25,12 +25,33 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       name: meta.name,
       description: meta.description,
       canDelete: meta.canDelete,
-      warnings: meta.warnings ?? [],
       fields,
     });
   } catch (err) {
     return new Response((err as Error).message, { status: 404 });
   }
+}
+
+export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  const { companyId } = await getCompanyId();
+  if (!companyId) return new Response("unauthorized", { status: 401 });
+
+  const body = (await req.json()) as { name?: string; description?: string; fields?: any[] };
+  const update: Record<string, any> = {};
+  if (typeof body.name === "string") update.name = body.name;
+  if (typeof body.description === "string") update.description = body.description;
+  if (Array.isArray(body.fields)) update.fields = body.fields;
+  if (Object.keys(update).length === 0) return new Response("no changes", { status: 400 });
+  update.updated_at = new Date().toISOString();
+
+  const service = createServiceClient();
+  const { error } = await service
+    .from("contract_templates")
+    .update(update)
+    .eq("id", params.id)
+    .eq("company_id", companyId);
+  if (error) return new Response(error.message, { status: 400 });
+  return Response.json({ ok: true });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {

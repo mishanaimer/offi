@@ -37,49 +37,46 @@ interface AIResponse {
   fields: AIField[];
 }
 
-const SYSTEM_PROMPT = `Ты — эксперт по российским договорам. Тебе дают текст договора в формате .docx.
-Найди в нём все «переменные» части — то, что меняется от договора к договору
-(между разными контрагентами / датами / суммами), и которые надо будет
-заполнять при создании нового договора.
+const SYSTEM_PROMPT = `Ты помогаешь сделать из загруженного договора заполняемый шаблон.
 
-Типичные переменные:
-- наименование контрагента (полное и краткое: «ООО «...» / Общество с ограниченной ответственностью «...»»)
+КРИТИЧЕСКИ ВАЖНО:
+1. Используй ТОЛЬКО текст, который есть в данном тебе документе. Не дополняй, не угадывай, не подставляй типичные значения «по памяти».
+2. Если в документе на месте контрагента стоит «___________» или пусто — НЕ ВКЛЮЧАЙ это поле в шаблон (этот документ ещё пустой шаблон, нечего из него взять).
+3. Каждое значение в "sample" должно дословно встречаться в тексте документа, как substring. Если ты пишешь sample, которого нет в тексте — это ошибка.
+
+Найди в тексте «переменные» части — конкретные значения для одной из сторон (обычно второй стороны / клиента / абонента), которые меняются от договора к договору:
+- наименование контрагента
 - ИНН, КПП, ОГРН
-- банк, расчётный счёт, корреспондентский счёт, БИК
-- юридический и фактический адреса
-- ФИО подписанта (как написано в договоре, без склонений), должность подписанта
-- даты (договора, акта, начала услуги) — день, месяц, год отдельными полями если они отдельно стоят
-- номер договора
-- цены, суммы, тарифы
-- предмет / услуга / адрес обслуживания, если применимо
-- любые другие конкретные значения, относящиеся к этой сделке
+- банк, расчётный/корр. счёт, БИК
+- адреса
+- ФИО и должность подписанта
+- email, телефон контрагента
+- даты, номер договора, цены, суммы — ЕСЛИ они есть в тексте конкретными значениями
 
-Верни СТРОГО JSON в формате:
+НЕ создавай поле, если:
+- значение слишком общее и встречается во всём документе (например одиночные «28», «2026»)
+- значение относится к ИСПОЛНИТЕЛЮ (тебе как стороне договора) — реквизиты исполнителя должны остаться зашитыми в шаблон
+- ты не уверен, что нашёл точное вхождение в текст
+
+Верни СТРОГО JSON без markdown:
 {
-  "name": "Краткое название шаблона на русском (например «Договор оказания услуг»)",
-  "description": "1-2 предложения о шаблоне",
+  "name": "Краткое название шаблона (выведи из содержания, например «Договор оказания услуг»)",
+  "description": "1-2 предложения, о чём договор",
   "fields": [
     {
       "key": "snake_case_key",
-      "label": "Русская подпись для UI",
-      "sample": "Точное значение из текста (как написано — для поиска и замены)",
+      "label": "Подпись для UI на русском",
+      "sample": "Точная подстрока из текста — как написано, с точностью до пробелов",
       "type": "text" | "textarea",
-      "hint": "Подсказка для пользователя (опц.)",
-      "group": "Группа: contract|client|bank|signatory|address|service (опц.)"
+      "hint": "Подсказка пользователю (опц.)"
     }
   ]
 }
 
-Правила:
-- "sample" — это ТОЧНОЕ значение из текста договора, без кавычек-обёрток, как ты его видишь в исходнике. Это критично — по нему мы будем искать и заменять.
-- Используй type:"textarea" для длинных значений (адреса, преамбулы, описания).
-- key пиши как snake_case (client_inn, contract_number, signatory_full_name).
-- Для контрагентов префиксы: client_ (для абонента/покупателя/заказчика).
-- Для подписанта: signatory_title, signatory_full_name, signatory_short, signatory_clause.
-- Не добавляй поля для постоянных частей договора (текст условий, заголовки разделов).
-- Если одна переменная встречается в нескольких местах с одинаковым значением — это ОДНО поле.
-- Не создавай поля «исполнитель» — речь только об ОДНОМ контрагенте, реквизиты исполнителя зашиты в шаблон.
-- Возвращай только JSON, без markdown-обёртки.`;
+Правила формата:
+- key — snake_case, осмысленный (client_inn, signatory_full_name, contract_date)
+- type:"textarea" — для длинных значений (адреса, длинные наименования)
+- Для одной переменной встречающейся несколько раз — одно поле (значение во всех местах одно и то же)`;
 
 const MAX_TEXT_LEN = 60_000; // ~30K токенов — комфортно влезает в контекст Sonnet
 
@@ -136,46 +133,50 @@ function decodeXml(s: string): string {
 }
 
 export interface BuildRulesOptions {
-  /** Если sample встречается чаще, чем maxOccurrencesIfShort, и его длина < minSampleLen,
-   *  пропускаем его (избегаем «2026» в адресе). */
+  /** Короткие неоднозначные значения, встречающиеся часто, не используем
+   *  для автозамены (но поле всё равно создаём). */
   minSampleLen?: number;
   maxOccurrencesIfShort?: number;
 }
 
+interface BuildOutput {
+  replacements: ReplacementRule[];
+  /** Поля, у которых получилось построить хотя бы одно правило — их и
+   *  показываем пользователю. Остальные молча выкидываем. */
+  acceptedFields: AIField[];
+}
+
 /**
- * Строит правила замены для всех полей, найденных ИИ.
- * Сопоставляет sample с текстом из <w:t> и для каждого попадания
- * формирует rule {find: "<w:t...>X</w:t>", replace: "<w:t...>Y</w:t>"}.
+ * Строит правила замены для каждого поля. Если sample не находится в XML
+ * как substring какого-нибудь <w:t>, поле выкидывается — без шумных
+ * warnings, потому что это обычно «галлюцинация» ИИ (он подставил значение
+ * по памяти, а в документе его нет).
  */
 export function buildReplacementsFromFields(
   xml: string,
   fields: AIField[],
   opts: BuildRulesOptions = {}
-): { replacements: ReplacementRule[]; warnings: string[] } {
+): BuildOutput {
   const minSampleLen = opts.minSampleLen ?? 4;
   const maxOccIfShort = opts.maxOccurrencesIfShort ?? 5;
 
   const matches = findWtMatches(xml);
   const replacements: ReplacementRule[] = [];
-  const warnings: string[] = [];
+  const acceptedFields: AIField[] = [];
   const seenFinds = new Set<string>();
 
   for (const f of fields) {
     const sample = (f.sample ?? "").trim();
-    if (!sample) {
-      warnings.push(`Поле «${f.key}» — пустой sample, замена не построена`);
-      continue;
-    }
+    if (!sample) continue;
 
-    // Защита от ложных срабатываний на коротких неоднозначных значениях
+    // Защита от коротких неоднозначных значений (например одиночное «28»)
     let occurrencesInDoc = 0;
     for (const wt of matches) {
       if (decodeXml(wt.text).includes(sample)) occurrencesInDoc++;
     }
     if (sample.length < minSampleLen && occurrencesInDoc > maxOccIfShort) {
-      warnings.push(
-        `Поле «${f.key}»: значение «${sample}» слишком короткое и встречается ${occurrencesInDoc} раз — пропущено, заполните вручную`
-      );
+      // короткий sample — поле всё равно полезно, просто без автозамены
+      acceptedFields.push(f);
       continue;
     }
 
@@ -183,29 +184,33 @@ export function buildReplacementsFromFields(
     for (const wt of matches) {
       const decoded = decodeXml(wt.text);
       if (!decoded.includes(sample)) continue;
-      // Заменяем sample на {{key}}
       const newDecoded = decoded.split(sample).join(`{{${f.key}}}`);
-      // Re-кодируем для XML
       const newEscaped = escapeXml(newDecoded);
       const newWt = `<w:t${wt.attrs}>${newEscaped}</w:t>`;
-      // Дедуп: одна и та же find-строка → одно правило (replace на все вхождения)
       if (seenFinds.has(wt.fullMatch)) continue;
       seenFinds.add(wt.fullMatch);
-      replacements.push({
-        find: wt.fullMatch,
-        replace: newWt,
-        count: null,
-      });
+      replacements.push({ find: wt.fullMatch, replace: newWt, count: null });
       appliedThis++;
     }
-    if (appliedThis === 0) {
-      warnings.push(
-        `Поле «${f.key}» (${f.label}): значение «${sample}» не найдено в документе — поле создано, но автоподстановка не работает`
-      );
-    }
+    // Если sample не найден ни в одном <w:t> — поле выкидываем (галлюцинация ИИ).
+    if (appliedThis > 0) acceptedFields.push(f);
   }
 
-  return { replacements, warnings };
+  return { replacements, acceptedFields };
+}
+
+/** Проверяет, действительно ли каждое sample встречается в plain-text.
+ *  Это первый барьер от галлюцинаций ИИ. */
+function filterFieldsByPlainText(plainText: string, fields: AIField[]): AIField[] {
+  const normalized = plainText.replace(/\s+/g, " ");
+  const out: AIField[] = [];
+  for (const f of fields) {
+    const sample = (f.sample ?? "").trim();
+    if (!sample) continue;
+    const normSample = sample.replace(/\s+/g, " ");
+    if (normalized.includes(normSample)) out.push(f);
+  }
+  return out;
 }
 
 export async function analyzeAndBuildTemplate(
@@ -213,20 +218,27 @@ export async function analyzeAndBuildTemplate(
   xml: string
 ): Promise<AnalyzedTemplate> {
   const ai = await analyzeContractText(plainText);
-  const fields: FieldDef[] = ai.fields.map((f) => ({
+
+  // Фильтр 1: sample должен быть в plain-text
+  const realFields = filterFieldsByPlainText(plainText, ai.fields);
+
+  // Фильтр 2: для sample строим правило замены, или поле выкидываем
+  const { replacements, acceptedFields } = buildReplacementsFromFields(xml, realFields);
+
+  const fields: FieldDef[] = acceptedFields.map((f) => ({
     key: f.key,
     label: f.label,
     placeholder: f.sample,
     type: f.type ?? "text",
     hint: f.hint,
   }));
-  const { replacements, warnings } = buildReplacementsFromFields(xml, ai.fields);
+
   return {
     name: ai.name || "Шаблон договора",
     description: ai.description || "",
     fields,
     replacements,
     computed_fields: [],
-    warnings,
+    warnings: [],
   };
 }
