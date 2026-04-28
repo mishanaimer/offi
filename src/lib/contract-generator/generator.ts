@@ -132,3 +132,27 @@ export async function generateAndPreview(opts: GenerateOptions): Promise<Generat
     suggestedName: `Договор_${safeName}.docx`,
   };
 }
+
+/**
+ * Генерирует «шаблонную» версию docx — где найденные поля заменены на
+ * литеральные плейсхолдеры `{{key}}`. Это даёт пользователю возможность
+ * увидеть сам шаблон с подсветкой переменных мест (а не голый текст с
+ * примерными значениями из исходного договора).
+ */
+export async function generateTemplatePreviewDocx(
+  templateBuffer: Buffer,
+  config: ContractConfig
+): Promise<Buffer> {
+  // Собираем «фейковый data» — где для каждого поля значение это `{{key}}`.
+  // Computed_fields пропускаем (ставим пустую строку), они вторичны.
+  const fakeData: Record<string, string> = {};
+  for (const f of config.fields) {
+    fakeData[f.key] = `{{${f.key}}}`;
+  }
+  const { docx } = await generateContractDocx({
+    templateBuffer,
+    config,
+    data: fakeData,
+  });
+  return docx;
+}

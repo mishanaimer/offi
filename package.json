@@ -16,6 +16,7 @@
     "@xmldom/xmldom": "^0.9.10",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "docx-preview": "^0.3.7",
     "jszip": "^3.10.1",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.8.0",

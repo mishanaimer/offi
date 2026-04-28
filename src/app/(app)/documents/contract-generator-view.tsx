@@ -89,10 +89,14 @@ export function ContractGeneratorView() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [templateHtml, setTemplateHtml] = useState<string | null>(null);
+  const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const previewMountRef = useRef<HTMLDivElement | null>(null);
   const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState<string>("");
+
+  const cardFileRef = useRef<HTMLInputElement>(null);
+  const [cardLoading, setCardLoading] = useState(false);
 
   async function refreshTemplates(autoSelect?: string) {
     setLoadingList(true);
@@ -115,10 +119,10 @@ export function ContractGeneratorView() {
   useEffect(() => {
     if (!selectedId) {
       setDetails(null);
-      setTemplateHtml(null);
+      setTemplatePreviewBase64(null);
       return;
     }
-    setTemplateHtml(null);
+    setTemplatePreviewBase64(null);
     fetch(`/api/documents/templates/${selectedId}`)
       .then((r) => {
         if (!r.ok) throw new Error("Не удалось загрузить шаблон");
@@ -132,12 +136,44 @@ export function ContractGeneratorView() {
         setData(initial);
       })
       .catch(() => setDetails(null));
-    // подгружаем превью лениво
+    // лениво подгружаем «шаблонный» docx (с {{плейсхолдерами}})
     fetch(`/api/documents/templates/${selectedId}/preview`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((j: { html: string }) => setTemplateHtml(j.html))
-      .catch(() => setTemplateHtml(null));
+      .then((j: { docxBase64: string }) => setTemplatePreviewBase64(j.docxBase64))
+      .catch(() => setTemplatePreviewBase64(null));
   }, [selectedId]);
+
+  // Когда модалка превью открыта и есть docx — рендерим его постранично
+  // через docx-preview и пост-обрабатываем плейсхолдеры подсветкой.
+  useEffect(() => {
+    if (!showPreview || !templatePreviewBase64 || !previewMountRef.current) return;
+    let cancelled = false;
+    (async () => {
+      const docxPreview = await import("docx-preview");
+      const bytes = base64ToBytes(templatePreviewBase64);
+      const blob = new Blob([bytes.buffer as ArrayBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+      if (cancelled || !previewMountRef.current) return;
+      previewMountRef.current.innerHTML = "";
+      await docxPreview.renderAsync(blob, previewMountRef.current, undefined, {
+        className: "docx",
+        inWrapper: true,
+        ignoreWidth: false,
+        ignoreHeight: false,
+        ignoreFonts: false,
+        breakPages: true,
+        useBase64URL: false,
+      });
+      if (cancelled || !previewMountRef.current) return;
+      // Подсветка {{key}} в HTML через DOM-обход (всё рендерится из чистого docx,
+      // поэтому делаем post-replace внутри text-нод, не ломая разметку).
+      highlightPlaceholders(previewMountRef.current);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showPreview, templatePreviewBase64]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -152,6 +188,19 @@ export function ContractGeneratorView() {
 
   const groupedFields = useMemo(() => (details ? groupFields(details.fields) : []), [details]);
 
+  function applyParsed(parsed: Record<string, string>): number {
+    let filled = 0;
+    const next = { ...data };
+    for (const k of Object.keys(parsed)) {
+      if (k in fieldsByKey) {
+        next[k] = parsed[k];
+        filled++;
+      }
+    }
+    setData(next);
+    return filled;
+  }
+
   async function handleParse() {
     const text = pasteText.trim();
     if (!text) {
@@ -160,27 +209,44 @@ export function ContractGeneratorView() {
     }
     setParseStatus({ msg: "Распознаю…", tone: "ok" });
     try {
-      const r = await fetch("/api/documents/parse", {
+      const r = await fetch("/api/documents/parse-card", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      const parsed = (await r.json()) as Record<string, string>;
-      let filled = 0;
-      const next = { ...data };
-      for (const k of Object.keys(parsed)) {
-        if (k in fieldsByKey) {
-          next[k] = parsed[k];
-          filled++;
-        }
-      }
-      setData(next);
+      if (!r.ok) throw new Error(await r.text());
+      const j = (await r.json()) as { parsed: Record<string, string> };
+      const filled = applyParsed(j.parsed);
       setParseStatus({
         msg: filled ? `✓ Заполнено полей: ${filled}` : "Поля не найдены — проверь текст",
         tone: filled ? "ok" : "warn",
       });
     } catch (e) {
       setParseStatus({ msg: "Ошибка: " + (e as Error).message, tone: "err" });
+    }
+  }
+
+  async function handleCardFile(file: File) {
+    setCardLoading(true);
+    setParseStatus({ msg: `Читаю файл «${file.name}»…`, tone: "ok" });
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/documents/parse-card", { method: "POST", body: fd });
+      if (!r.ok) throw new Error(await r.text());
+      const j = (await r.json()) as { text: string; parsed: Record<string, string> };
+      setPasteText(j.text);
+      const filled = applyParsed(j.parsed);
+      setParseStatus({
+        msg: filled
+          ? `✓ Из файла «${file.name}» заполнено полей: ${filled}`
+          : `Из файла «${file.name}» извлечён текст, но реквизиты не распознались — проверь и добавь вручную`,
+        tone: filled ? "ok" : "warn",
+      });
+    } catch (e) {
+      setParseStatus({ msg: "Ошибка: " + (e as Error).message, tone: "err" });
+    } finally {
+      setCardLoading(false);
     }
   }
 
@@ -406,26 +472,61 @@ export function ContractGeneratorView() {
                     Полей: {details.fields.length}
                   </div>
                 </div>
-                {templateHtml && (
+                {templatePreviewBase64 && (
                   <Button variant="secondary" size="sm" onClick={() => setShowPreview(true)}>
                     <Eye className="w-4 h-4" /> Посмотреть шаблон
                   </Button>
                 )}
               </div>
 
-              {/* Paste-area */}
+              {/* Paste-area + drop карточки */}
               <div className="card-surface p-5 space-y-3">
                 <div className="font-medium flex items-center gap-2">
-                  <Wand2 className="w-4 h-4 text-primary" /> Распознать реквизиты из текста
+                  <Wand2 className="w-4 h-4 text-primary" /> Заполнить реквизиты контрагента
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Вставь карточку контрагента — ИНН, КПП, ОГРН, счета, банк, адреса и подписант
-                  заполнятся автоматически (если поля совпадают).
+                  Перетащи файл карточки (PDF / DOCX / TXT / CSV) или вставь текст — ИНН, КПП,
+                  ОГРН, счета, банк, адреса и подписант заполнятся автоматически.
                 </p>
+
+                <div
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) handleCardFile(f);
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onClick={() => cardFileRef.current?.click()}
+                  className="rounded-xl border border-dashed border-border hover:border-primary cursor-pointer p-3 flex items-center gap-3 bg-muted/20 hover:bg-[hsl(var(--accent-brand-light))] transition"
+                >
+                  {cardLoading ? (
+                    <Sparkles className="w-4 h-4 text-primary animate-pulse shrink-0" />
+                  ) : (
+                    <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
+                  )}
+                  <div className="text-xs leading-snug">
+                    <div className="font-medium">Загрузить файл карточки</div>
+                    <div className="text-muted-foreground">
+                      PDF, DOCX, TXT, CSV — текст и реквизиты вытащим сами
+                    </div>
+                  </div>
+                </div>
+                <input
+                  ref={cardFileRef}
+                  type="file"
+                  accept=".pdf,.docx,.txt,.csv,.md,.html,.htm,.tsv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleCardFile(f);
+                    e.target.value = "";
+                  }}
+                />
+
                 <Textarea
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
-                  placeholder={"ООО «АЛОЭ»\nИНН 7814293260, КПП 781401001, ОГРН 1157847365015\n…"}
+                  placeholder={"…или вставь текст карточки сюда:\nООО «АЛОЭ»\nИНН 7814293260, КПП 781401001, ОГРН 1157847365015\n…"}
                   className="min-h-[120px] font-mono text-xs"
                 />
                 <div className="flex items-center gap-3">
@@ -558,33 +659,35 @@ export function ContractGeneratorView() {
         </div>
       </div>
 
-      {/* Template preview modal */}
-      {showPreview && templateHtml && (
+      {/* Template preview modal — постраничный рендер docx-preview */}
+      {showPreview && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
           onClick={() => setShowPreview(false)}
         >
           <div
-            className="bg-background rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col"
+            className="bg-[#e8eaed] rounded-2xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <header className="flex items-center justify-between p-4 border-b border-border/60">
+            <header className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-background rounded-t-2xl">
               <div>
-                <h2 className="text-lg font-semibold">Шаблон договора</h2>
+                <h2 className="text-base font-semibold">Шаблон договора</h2>
                 {details && (
-                  <div className="text-xs text-muted-foreground mt-0.5">{details.name}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {details.name} · {details.fields.length} полей
+                  </div>
                 )}
               </div>
               <button className="rounded-lg p-1.5 hover:bg-muted" onClick={() => setShowPreview(false)}>
                 <X className="w-4 h-4" />
               </button>
             </header>
-            <div className="flex-1 overflow-y-auto p-5">
-              <div
-                className="prose prose-sm max-w-none border border-border rounded-xl p-5 bg-card"
-                // eslint-disable-next-line react/no-danger
-                dangerouslySetInnerHTML={{ __html: templateHtml }}
-              />
+            <div className="flex-1 overflow-auto p-6 flex justify-center">
+              {!templatePreviewBase64 ? (
+                <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
+              ) : (
+                <div ref={previewMountRef} className="docx-preview-host" />
+              )}
             </div>
           </div>
         </div>
@@ -713,4 +816,39 @@ function base64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(len);
   for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// Обходит DOM и оборачивает все вхождения {{key}} в стилизованные span,
+// чтобы пользователь видел в превью где именно подставляются значения.
+const PLACEHOLDER_RE = /\{\{(\w+)\}\}/g;
+function highlightPlaceholders(root: HTMLElement) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  let node: Node | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((node = walker.nextNode())) {
+    const t = node as Text;
+    if (t.nodeValue && PLACEHOLDER_RE.test(t.nodeValue)) {
+      targets.push(t);
+    }
+    PLACEHOLDER_RE.lastIndex = 0;
+  }
+  for (const t of targets) {
+    const text = t.nodeValue ?? "";
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0;
+    PLACEHOLDER_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = PLACEHOLDER_RE.exec(text)) !== null) {
+      if (m.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+      const span = document.createElement("span");
+      span.textContent = m[0];
+      span.className = "tpl-placeholder";
+      span.setAttribute("data-key", m[1]);
+      frag.appendChild(span);
+      lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+    t.parentNode?.replaceChild(frag, t);
+  }
 }

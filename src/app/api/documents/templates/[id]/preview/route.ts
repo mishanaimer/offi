@@ -1,12 +1,15 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveTemplate } from "@/lib/contract-generator/registry";
+import { generateTemplatePreviewDocx } from "@/lib/contract-generator/generator";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-// Возвращает HTML-превью исходного .docx — чтобы пользователь видел
-// сам шаблон в карточке (а не только список найденных полей).
+// Возвращает «шаблонную» версию .docx, где найденные ИИ переменные
+// уже заменены на литеральные плейсхолдеры вида {{client_inn}}.
+// Клиент рендерит его через docx-preview, получая постраничный
+// просмотр с реальной вёрсткой Word.
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -20,10 +23,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const companyId = (profile?.company_id as string) ?? null;
 
   try {
-    const { templateBuffer } = await resolveTemplate(params.id, companyId);
-    const mammoth = await import("mammoth");
-    const { value } = await mammoth.convertToHtml({ buffer: templateBuffer });
-    return Response.json({ html: value });
+    const { templateBuffer, config } = await resolveTemplate(params.id, companyId);
+    const preview = await generateTemplatePreviewDocx(templateBuffer, config);
+    return Response.json({ docxBase64: preview.toString("base64") });
   } catch (err) {
     return new Response((err as Error).message, { status: 404 });
   }
