@@ -90,7 +90,12 @@ export function ContractGeneratorView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
+  const [templatePlainText, setTemplatePlainText] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editingText, setEditingText] = useState<string>("");
+  const [savingText, setSavingText] = useState(false);
+  const [textEditStatus, setTextEditStatus] = useState<string | null>(null);
   const previewMountRef = useRef<HTMLDivElement | null>(null);
   const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState<string>("");
@@ -136,11 +141,17 @@ export function ContractGeneratorView() {
         setData(initial);
       })
       .catch(() => setDetails(null));
-    // лениво подгружаем «шаблонный» docx (с {{плейсхолдерами}})
+    // лениво подгружаем «шаблонный» docx (с {{плейсхолдерами}}) + plain-text для редактора
     fetch(`/api/documents/templates/${selectedId}/preview`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((j: { docxBase64: string }) => setTemplatePreviewBase64(j.docxBase64))
-      .catch(() => setTemplatePreviewBase64(null));
+      .then((j: { docxBase64: string; plainText?: string }) => {
+        setTemplatePreviewBase64(j.docxBase64);
+        setTemplatePlainText(j.plainText ?? null);
+      })
+      .catch(() => {
+        setTemplatePreviewBase64(null);
+        setTemplatePlainText(null);
+      });
   }, [selectedId]);
 
   // Когда модалка превью открыта и есть docx — рендерим его постранично
@@ -166,14 +177,15 @@ export function ContractGeneratorView() {
         useBase64URL: false,
       });
       if (cancelled || !previewMountRef.current) return;
-      // Подсветка {{key}} в HTML через DOM-обход (всё рендерится из чистого docx,
-      // поэтому делаем post-replace внутри text-нод, не ломая разметку).
-      highlightPlaceholders(previewMountRef.current);
+      // Подсветка {{key}} красивыми карточками с label/иконкой
+      const fieldsMap: Record<string, { label: string; type?: string }> = {};
+      for (const f of details?.fields ?? []) fieldsMap[f.key] = { label: f.label, type: f.type };
+      highlightPlaceholders(previewMountRef.current, fieldsMap);
     })();
     return () => {
       cancelled = true;
     };
-  }, [showPreview, templatePreviewBase64]);
+  }, [showPreview, templatePreviewBase64, details]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -207,18 +219,24 @@ export function ContractGeneratorView() {
       setParseStatus({ msg: "Сначала вставь текст", tone: "warn" });
       return;
     }
-    setParseStatus({ msg: "Распознаю…", tone: "ok" });
+    setParseStatus({ msg: "Распознаю (regex + ИИ)…", tone: "ok" });
     try {
       const r = await fetch("/api/documents/parse-card", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, fields: details?.fields ?? [] }),
       });
       if (!r.ok) throw new Error(await r.text());
-      const j = (await r.json()) as { parsed: Record<string, string> };
+      const j = (await r.json()) as {
+        parsed: Record<string, string>;
+        counts?: { regex: number; ai: number; total: number };
+      };
       const filled = applyParsed(j.parsed);
+      const ai = j.counts?.ai ?? 0;
       setParseStatus({
-        msg: filled ? `✓ Заполнено полей: ${filled}` : "Поля не найдены — проверь текст",
+        msg: filled
+          ? `✓ Заполнено полей: ${filled}${ai ? ` (из них ${ai} распознал ИИ)` : ""}`
+          : "Поля не найдены — проверь текст",
         tone: filled ? "ok" : "warn",
       });
     } catch (e) {
@@ -228,18 +246,24 @@ export function ContractGeneratorView() {
 
   async function handleCardFile(file: File) {
     setCardLoading(true);
-    setParseStatus({ msg: `Читаю файл «${file.name}»…`, tone: "ok" });
+    setParseStatus({ msg: `Читаю файл «${file.name}» и анализирую с ИИ…`, tone: "ok" });
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("fields", JSON.stringify(details?.fields ?? []));
       const r = await fetch("/api/documents/parse-card", { method: "POST", body: fd });
       if (!r.ok) throw new Error(await r.text());
-      const j = (await r.json()) as { text: string; parsed: Record<string, string> };
+      const j = (await r.json()) as {
+        text: string;
+        parsed: Record<string, string>;
+        counts?: { regex: number; ai: number; total: number };
+      };
       setPasteText(j.text);
       const filled = applyParsed(j.parsed);
+      const ai = j.counts?.ai ?? 0;
       setParseStatus({
         msg: filled
-          ? `✓ Из файла «${file.name}» заполнено полей: ${filled}`
+          ? `✓ Из файла «${file.name}» заполнено полей: ${filled}${ai ? ` (из них ${ai} распознал ИИ)` : ""}`
           : `Из файла «${file.name}» извлечён текст, но реквизиты не распознались — проверь и добавь вручную`,
         tone: filled ? "ok" : "warn",
       });
@@ -363,6 +387,78 @@ export function ContractGeneratorView() {
     const newFields = details.fields.map((f) => (f.key === key ? { ...f, label: newLabel } : f));
     await persistFields(newFields);
     setEditingFieldKey(null);
+  }
+
+  function startEditingText() {
+    if (templatePlainText == null) return;
+    setEditingText(templatePlainText);
+    setEditMode(true);
+    setTextEditStatus(null);
+  }
+
+  function cancelEditingText() {
+    setEditMode(false);
+    setEditingText("");
+    setTextEditStatus(null);
+  }
+
+  // Простой построчный диф: для пары (origLine, editedLine) на одинаковом
+  // индексе — если разные, добавляем правило {old, new}. Этого хватает
+  // для типичных правок (поправить опечатку, переписать формулировку).
+  function buildLineEdits(orig: string, edited: string): Array<{ old: string; new: string }> {
+    const a = orig.split(/\r?\n/);
+    const b = edited.split(/\r?\n/);
+    const len = Math.min(a.length, b.length);
+    const out: Array<{ old: string; new: string }> = [];
+    for (let i = 0; i < len; i++) {
+      const oa = a[i].trim();
+      const ob = b[i].trim();
+      if (!oa || oa === ob) continue;
+      // Защита: не сохраняем правки на строках с плейсхолдерами — иначе
+      // сломаем замены полей. Пользователь может удалить плейсхолдер,
+      // редактируя поле через ✎/🗑.
+      if (oa.includes("{{") || ob.includes("{{")) continue;
+      out.push({ old: oa, new: ob });
+    }
+    return out;
+  }
+
+  async function saveEditingText() {
+    if (!selectedId || templatePlainText == null) return;
+    const edits = buildLineEdits(templatePlainText, editingText);
+    if (edits.length === 0) {
+      setTextEditStatus("Изменений нет");
+      return;
+    }
+    setSavingText(true);
+    setTextEditStatus(`Сохраняю ${edits.length} правок…`);
+    try {
+      const r = await fetch(`/api/documents/templates/${selectedId}/text-edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ edits }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const j = (await r.json()) as { applied: number; message?: string };
+      if (j.applied > 0) {
+        setTextEditStatus(`✓ Сохранено правок: ${j.applied}`);
+        // Перерисуем превью + plain-text — там теперь обновлённый шаблон
+        const pr = await fetch(`/api/documents/templates/${selectedId}/preview`);
+        if (pr.ok) {
+          const p = (await pr.json()) as { docxBase64: string; plainText?: string };
+          setTemplatePreviewBase64(p.docxBase64);
+          setTemplatePlainText(p.plainText ?? null);
+          setEditingText(p.plainText ?? "");
+        }
+        setEditMode(false);
+      } else {
+        setTextEditStatus(j.message ?? "Не удалось применить правки — текст не найден в шаблоне");
+      }
+    } catch (e) {
+      setTextEditStatus("Ошибка: " + (e as Error).message);
+    } finally {
+      setSavingText(false);
+    }
   }
 
   function onDrop(e: React.DragEvent) {
@@ -663,32 +759,101 @@ export function ContractGeneratorView() {
       {showPreview && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-          onClick={() => setShowPreview(false)}
+          onClick={() => {
+            setShowPreview(false);
+            cancelEditingText();
+          }}
         >
           <div
             className="bg-[#e8eaed] rounded-2xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <header className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-background rounded-t-2xl">
-              <div>
-                <h2 className="text-base font-semibold">Шаблон договора</h2>
+            <header className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-background rounded-t-2xl gap-3">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold truncate">Шаблон договора</h2>
                 {details && (
-                  <div className="text-xs text-muted-foreground mt-0.5">
+                  <div className="text-xs text-muted-foreground mt-0.5 truncate">
                     {details.name} · {details.fields.length} полей
                   </div>
                 )}
               </div>
-              <button className="rounded-lg p-1.5 hover:bg-muted" onClick={() => setShowPreview(false)}>
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {!editMode ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={startEditingText}
+                    disabled={templatePlainText == null}
+                  >
+                    <Pencil className="w-4 h-4" /> Редактировать текст
+                  </Button>
+                ) : (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={cancelEditingText} disabled={savingText}>
+                      Отмена
+                    </Button>
+                    <Button size="sm" onClick={saveEditingText} disabled={savingText}>
+                      {savingText ? "Сохраняю…" : "Сохранить правки"}
+                    </Button>
+                  </>
+                )}
+                <button
+                  className="rounded-lg p-1.5 hover:bg-muted"
+                  onClick={() => {
+                    setShowPreview(false);
+                    cancelEditingText();
+                  }}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </header>
-            <div className="flex-1 overflow-auto p-6 flex justify-center">
-              {!templatePreviewBase64 ? (
-                <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
-              ) : (
-                <div ref={previewMountRef} className="docx-preview-host" />
-              )}
-            </div>
+
+            {textEditStatus && (
+              <div
+                className={`px-4 py-2 text-xs border-b border-border/60 bg-background ${
+                  textEditStatus.startsWith("Ошибка")
+                    ? "text-destructive"
+                    : textEditStatus.startsWith("✓")
+                    ? "text-primary"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {textEditStatus}
+              </div>
+            )}
+
+            {editMode ? (
+              <div className="flex-1 overflow-hidden grid lg:grid-cols-2 gap-0 bg-background">
+                <div className="overflow-auto p-4 border-r border-border/60">
+                  <div className="text-xs text-muted-foreground mb-2">
+                    Редактируй текст слева — поля-карточки в превью справа останутся
+                    неизменными. Изменённые строки сохранятся как правила замены в шаблоне.
+                  </div>
+                  <Textarea
+                    value={editingText}
+                    onChange={(e) => setEditingText(e.target.value)}
+                    className="min-h-[60vh] font-mono text-xs leading-relaxed"
+                  />
+                </div>
+                <div className="overflow-auto p-4">
+                  <div className="text-xs text-muted-foreground mb-2">Превью</div>
+                  {templatePreviewBase64 ? (
+                    <div ref={previewMountRef} className="docx-preview-host" />
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Готовлю превью…</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto p-6 flex justify-center">
+                {!templatePreviewBase64 ? (
+                  <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
+                ) : (
+                  <div ref={previewMountRef} className="docx-preview-host" />
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -818,20 +983,42 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-// Обходит DOM и оборачивает все вхождения {{key}} в стилизованные span,
-// чтобы пользователь видел в превью где именно подставляются значения.
+// Обходит DOM и оборачивает все вхождения {{key}} в красивые карточки
+// с человеческой подписью поля и иконкой типа.
 const PLACEHOLDER_RE = /\{\{(\w+)\}\}/g;
-function highlightPlaceholders(root: HTMLElement) {
+
+function pickIconForKey(key: string): string {
+  const k = key.toLowerCase();
+  if (k.includes("date") || k.includes("day") || k.includes("month") || k.includes("year"))
+    return "📅";
+  if (k.includes("inn") || k.includes("kpp") || k.includes("ogrn") || k.includes("bik"))
+    return "🔢";
+  if (k.includes("account") || k.includes("bank")) return "🏦";
+  if (k.includes("email")) return "✉️";
+  if (k.includes("phone") || k.includes("tel")) return "📞";
+  if (k.includes("address") || k.includes("addr")) return "📍";
+  if (k.includes("signatory") || k.includes("director") || k.includes("podpisant"))
+    return "👤";
+  if (k.includes("price") || k.includes("amount") || k.includes("cost") || k.includes("sum"))
+    return "💰";
+  if (k.includes("speed")) return "⚡";
+  if (k.includes("number") || k.includes("num")) return "№";
+  if (k.includes("client") || k.includes("contractor") || k.includes("contragent"))
+    return "🏢";
+  return "•";
+}
+
+function highlightPlaceholders(
+  root: HTMLElement,
+  fieldsMap: Record<string, { label: string; type?: string }>
+) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const targets: Text[] = [];
   let node: Node | null;
   // eslint-disable-next-line no-cond-assign
   while ((node = walker.nextNode())) {
     const t = node as Text;
-    if (t.nodeValue && PLACEHOLDER_RE.test(t.nodeValue)) {
-      targets.push(t);
-    }
-    PLACEHOLDER_RE.lastIndex = 0;
+    if (t.nodeValue && t.nodeValue.includes("{{")) targets.push(t);
   }
   for (const t of targets) {
     const text = t.nodeValue ?? "";
@@ -842,9 +1029,24 @@ function highlightPlaceholders(root: HTMLElement) {
     while ((m = PLACEHOLDER_RE.exec(text)) !== null) {
       if (m.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
       const span = document.createElement("span");
-      span.textContent = m[0];
       span.className = "tpl-placeholder";
-      span.setAttribute("data-key", m[1]);
+      const key = m[1];
+      span.setAttribute("data-key", key);
+      span.setAttribute("contenteditable", "false");
+
+      const meta = fieldsMap[key];
+      const label = meta?.label || key;
+
+      const icon = document.createElement("span");
+      icon.className = "tpl-placeholder-icon";
+      icon.textContent = pickIconForKey(key);
+      span.appendChild(icon);
+
+      const labelEl = document.createElement("span");
+      labelEl.className = "tpl-placeholder-label";
+      labelEl.textContent = label;
+      span.appendChild(labelEl);
+
       frag.appendChild(span);
       lastIdx = m.index + m[0].length;
     }

@@ -25,7 +25,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   try {
     const { templateBuffer, config } = await resolveTemplate(params.id, companyId);
     const preview = await generateTemplatePreviewDocx(templateBuffer, config);
-    return Response.json({ docxBase64: preview.toString("base64") });
+
+    // Дополнительно достаём plain-text оригинала шаблона (без замен) —
+    // чтобы UI мог открыть его в редакторе текста.
+    const mammoth = await import("mammoth");
+    const { value: plainText } = await mammoth.extractRawText({ buffer: templateBuffer });
+
+    return Response.json({
+      docxBase64: preview.toString("base64"),
+      plainText,
+    });
   } catch (err) {
     return new Response((err as Error).message, { status: 404 });
   }

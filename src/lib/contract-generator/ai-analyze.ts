@@ -213,6 +213,86 @@ function filterFieldsByPlainText(plainText: string, fields: AIField[]): AIField[
   return out;
 }
 
+// =================== ИИ-парсер карточки контрагента ===================
+//
+// Принимает текст карточки (из любого формата — мы извлекаем заранее) и
+// список полей конкретного шаблона. Просит Claude Sonnet вытащить
+// значения только тех полей, которые реально упомянуты в тексте.
+// Возвращает {key: value} — частичный набор, объединяется со значениями
+// из быстрого regex-парсера.
+
+const CARD_PARSE_PROMPT = `Ты помогаешь заполнить договор данными контрагента из его карточки.
+
+Тебе дают:
+1. Текст карточки контрагента (произвольный формат: выписка ЕГРЮЛ, шапка с реквизитами, скан документа в виде текста, и т.п.)
+2. Список полей договора, которые надо заполнить
+
+Заполни значения ТОЛЬКО тех полей, для которых в тексте есть прямой ответ.
+Если значения нет — НЕ ВКЛЮЧАЙ ключ в ответ. Не выдумывай, не угадывай.
+
+Соглашения по форматам:
+- ИНН/КПП/ОГРН/БИК — только цифры, без пробелов и тире
+- расчётный/корр. счёт — 20 цифр без пробелов
+- адреса — как написано в карточке, одной строкой
+- ФИО — как написано (если просят полностью — целиком; если «Фамилия И.О.» — сокращай)
+- даты — в формате как в карточке, не переформатировать
+- денежные суммы — только число и единица, без кавычек
+
+Верни СТРОГО JSON без markdown:
+{ "client_inn": "...", "client_email": "...", ... }
+
+Без пояснений. Только объект с найденными ключами.`;
+
+interface CardField {
+  key: string;
+  label: string;
+  hint?: string;
+  type?: "text" | "textarea";
+}
+
+export async function aiParseContractorCard(
+  cardText: string,
+  fields: CardField[]
+): Promise<Record<string, string>> {
+  if (!cardText.trim() || fields.length === 0) return {};
+
+  const fieldsDesc = fields
+    .map((f) => `- ${f.key} — ${f.label}${f.hint ? ` (${f.hint})` : ""}`)
+    .join("\n");
+
+  const trimmedCard = cardText.length > 30_000 ? cardText.slice(0, 30_000) : cardText;
+
+  try {
+    const result = await chatCompletion(
+      [
+        { role: "system", content: CARD_PARSE_PROMPT },
+        {
+          role: "user",
+          content:
+            `ПОЛЯ ДОГОВОРА:\n${fieldsDesc}\n\n` +
+            `КАРТОЧКА КОНТРАГЕНТА:\n${trimmedCard}`,
+        },
+      ],
+      { model: MODELS.main, temperature: 0.1, max_tokens: 2000 }
+    );
+    const raw = result.choices[0]?.message?.content ?? "{}";
+    const cleaned = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    const allowedKeys = new Set(fields.map((f) => f.key));
+    for (const [k, v] of Object.entries(parsed)) {
+      if (!allowedKeys.has(k)) continue;
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (s) out[k] = s;
+    }
+    return out;
+  } catch {
+    // Если ИИ упал — возвращаем пустой объект, regex остаётся.
+    return {};
+  }
+}
+
 export async function analyzeAndBuildTemplate(
   plainText: string,
   xml: string
