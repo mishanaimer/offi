@@ -29,6 +29,7 @@ import { bucket } from "@/lib/plans";
 import Link from "next/link";
 import { useApiHealth } from "@/components/api-health";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import { AUTO_RUN_TOOLS } from "@/lib/tools";
 
 type Attachment = {
   id: string;
@@ -448,6 +449,13 @@ export function ChatView({
                   msg.id === pendingAi.id ? { ...msg, toolCalls: calls } : msg
                 )
               );
+              // Read-only/безопасные тулы запускаем автоматически — пользователю
+              // не нужно жать «Подтвердить» на «найти клиента» или «список договоров».
+              for (const c of calls) {
+                if (AUTO_RUN_TOOLS.has(c.name)) {
+                  void runToolCall(pendingAi.id, c);
+                }
+              }
             }
           } catch {}
         }
@@ -932,6 +940,13 @@ const TOOL_LABELS: Record<string, string> = {
   create_meeting: "Создать встречу",
   add_to_calendar: "Добавить в календарь",
   find_client: "Найти клиента",
+  get_client: "Карточка клиента",
+  list_clients: "Список клиентов",
+  update_client: "Обновить клиента",
+  save_client_note: "Заметка по клиенту",
+  list_contract_templates: "Шаблоны договоров",
+  list_contracts: "Список договоров",
+  ai_create_contract: "Составить договор",
   generate_document: "Сгенерировать документ",
   remember_fact: "Запомнить факт",
 };
@@ -942,6 +957,13 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   create_meeting: Calendar,
   add_to_calendar: CalendarPlus,
   find_client: Search,
+  get_client: Search,
+  list_clients: Search,
+  update_client: Sparkles,
+  save_client_note: Brain,
+  list_contract_templates: FileText,
+  list_contracts: FileText,
+  ai_create_contract: FileText,
   generate_document: FileText,
   remember_fact: Brain,
 };
@@ -1054,9 +1076,45 @@ function ToolCallCard({ call, onRun }: { call: ToolCall; onRun?: () => void }) {
         </div>
       )}
       {s === "done" && (
-        <div className="px-3.5 py-2 border-t border-emerald-500/20 bg-emerald-500/5 text-[11px] text-emerald-700 flex items-center gap-2">
-          <Check className="w-3 h-3" />
-          Действие выполнено
+        <div className="px-3.5 py-2 border-t border-emerald-500/20 bg-emerald-500/5 text-[12px] text-emerald-800 space-y-1">
+          <div className="flex items-center gap-2">
+            <Check className="w-3 h-3" />
+            <span className="font-medium">Действие выполнено</span>
+          </div>
+          {call.name === "ai_create_contract" && call.result?.download_url && (
+            <a
+              href={call.result.download_url as string}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 mt-1 underline underline-offset-2 hover:opacity-80"
+            >
+              <FileText className="w-3 h-3" />
+              {String(call.result.name ?? "Договор.docx")}
+            </a>
+          )}
+          {call.name === "find_client" && Array.isArray(call.result?.clients) && (
+            <div className="text-[11px] text-emerald-900/80">
+              Найдено: {call.result.clients.length}
+              {call.result.clients
+                .slice(0, 3)
+                .map((c: any) => c.short_name || c.name)
+                .filter(Boolean)
+                .length > 0 && (
+                <span className="ml-1 opacity-70">
+                  · {call.result.clients
+                    .slice(0, 3)
+                    .map((c: any) => c.short_name || c.name)
+                    .filter(Boolean)
+                    .join(", ")}
+                </span>
+              )}
+            </div>
+          )}
+          {call.name === "list_contracts" && Array.isArray(call.result?.contracts) && (
+            <div className="text-[11px] text-emerald-900/80">
+              Договоров: {call.result.contracts.length}
+            </div>
+          )}
         </div>
       )}
       {s === "error" && (

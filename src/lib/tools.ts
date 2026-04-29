@@ -9,7 +9,7 @@ export const ACTION_TOOLS = [
     function: {
       name: "remember_fact",
       description:
-        "Сохранить долговременный факт в корпоративную память компании (о клиентах, договорённостях, правилах, ценах). Используй, когда пользователь явно просит запомнить или сообщает стабильную информацию.",
+        "Сохранить долговременный факт в корпоративную память компании (о клиентах, договорённостях, правилах, ценах). Используй, когда пользователь явно просит запомнить или сообщает стабильную информацию. Если факт о конкретном клиенте — обязательно укажи client_id.",
       parameters: {
         type: "object",
         properties: {
@@ -18,6 +18,10 @@ export const ACTION_TOOLS = [
             type: "string",
             enum: ["fact", "preference", "agreement", "rule"],
             description: "Тип факта",
+          },
+          client_id: {
+            type: "string",
+            description: "UUID клиента, если факт про конкретного клиента (опционально)",
           },
         },
         required: ["content"],
@@ -94,10 +98,11 @@ export const ACTION_TOOLS = [
     type: "function" as const,
     function: {
       name: "find_client",
-      description: "Найти клиента в базе по имени, компании или email.",
+      description:
+        "Найти клиента в CRM по имени, контактному лицу, ИНН, email, телефону или фрагменту названия. Возвращает до 8 совпадений с краткими данными. Используй ВСЕГДА, когда пользователь упоминает клиента — даже если уверен, что знаешь его.",
       parameters: {
         type: "object",
-        properties: { query: { type: "string" } },
+        properties: { query: { type: "string", description: "Поисковая фраза" } },
         required: ["query"],
       },
     },
@@ -105,8 +110,148 @@ export const ACTION_TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "get_client",
+      description:
+        "Получить ПОЛНУЮ карточку клиента по ID: реквизиты, подписант, банк, теги, заметки, файлы, договоры и факты памяти. Вызывай после find_client, когда нужно знать детали — до того, как генерировать договор/письмо.",
+      parameters: {
+        type: "object",
+        properties: { client_id: { type: "string", description: "UUID клиента" } },
+        required: ["client_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "list_clients",
+      description:
+        "Перечислить клиентов компании (по умолчанию 20 последних, с фильтром по статусу). Используй для вопросов «кто наши клиенты», «активные клиенты», «лиды».",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["lead", "active", "partner", "archived"],
+            description: "Опционально: фильтр по статусу",
+          },
+          limit: { type: "number", description: "Сколько вернуть, max 50" },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "update_client",
+      description:
+        "Обновить поля карточки клиента (реквизиты, контакты, статус, теги, summary). Передавай ТОЛЬКО изменяемые поля. Не сбрасывает остальные данные.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string" },
+          name: { type: "string" },
+          short_name: { type: "string" },
+          legal_name: { type: "string" },
+          contact: { type: "string" },
+          phone: { type: "string" },
+          email: { type: "string" },
+          telegram: { type: "string" },
+          website: { type: "string" },
+          industry: { type: "string" },
+          inn: { type: "string" },
+          kpp: { type: "string" },
+          ogrn: { type: "string" },
+          bank_name: { type: "string" },
+          bank_account: { type: "string" },
+          corr_account: { type: "string" },
+          bik: { type: "string" },
+          legal_address: { type: "string" },
+          actual_address: { type: "string" },
+          signatory_name: { type: "string" },
+          signatory_title: { type: "string" },
+          signatory_basis: { type: "string" },
+          status: { type: "string", enum: ["lead", "active", "partner", "archived"] },
+          tags: { type: "array", items: { type: "string" } },
+          summary: { type: "string", description: "Короткая выжимка про клиента (1–2 предложения)" },
+        },
+        required: ["client_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "save_client_note",
+      description:
+        "Добавить заметку (запись в историю общения) к карточке клиента. Используй, когда пользователь даёт информацию о звонке, встрече, договорённости — а полноценный fact для памяти не подходит.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string" },
+          content: { type: "string", description: "Текст заметки" },
+          source: {
+            type: "string",
+            enum: ["manual", "chat", "call", "email", "meeting"],
+          },
+        },
+        required: ["client_id", "content"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "list_contract_templates",
+      description:
+        "Список доступных DOCX-шаблонов договоров компании. Используй, когда пользователь просит составить договор, чтобы выбрать подходящий шаблон.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "list_contracts",
+      description:
+        "Список ранее сгенерированных договоров. Можно фильтровать по client_id или искать по имени/шаблону.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_id: { type: "string", description: "Опционально: только договоры этого клиента" },
+          query: { type: "string", description: "Поиск по имени файла/шаблона" },
+          limit: { type: "number" },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ai_create_contract",
+      description:
+        "Сгенерировать DOCX-договор из шаблона компании, автоподставив реквизиты клиента. Сохраняет результат в раздел Документы и возвращает ссылку на скачивание. Если template_id не задан — выбери самый подходящий из list_contract_templates по контексту (например, по описанию или по словам в названии).",
+      parameters: {
+        type: "object",
+        properties: {
+          template_id: { type: "string", description: "UUID шаблона из list_contract_templates" },
+          client_id: { type: "string", description: "UUID клиента — реквизиты подставятся автоматически" },
+          variables: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description:
+              "Доп. поля, которых нет в карточке клиента (предмет договора, сумма, сроки и т.п.). Ключи в snake_case как в шаблоне.",
+          },
+          name: { type: "string", description: "Понятное имя файла, опционально" },
+        },
+        required: ["client_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "generate_document",
-      description: "Сгенерировать документ из шаблона с подставленными данными клиента.",
+      description:
+        "Старая текстовая генерация по простому шаблону {{client.name}}. Для DOCX-договоров используй ai_create_contract.",
       parameters: {
         type: "object",
         properties: {
@@ -122,3 +267,14 @@ export const ACTION_TOOLS = [
 
 /** Список «опасных» действий — требуют явного подтверждения в UI. */
 export const CONFIRM_REQUIRED = new Set(["send_email", "send_telegram"]);
+
+/** Тулы, которые безопасно/полезно выполнять автоматически без UI-подтверждения
+ *  (read-only поиск или не-разрушительная запись). */
+export const AUTO_RUN_TOOLS = new Set<string>([
+  "find_client",
+  "get_client",
+  "list_clients",
+  "list_contract_templates",
+  "list_contracts",
+  "remember_fact",
+]);

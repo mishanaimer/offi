@@ -23,8 +23,16 @@ export async function ensureAdminPlatformCompany(userId: string, email: string) 
     .eq("id", userId)
     .maybeSingle();
 
-  // уже привязан к какой-то компании — ничего не делаем
-  if (userRow?.company_id) return;
+  // Уже привязан к компании — гарантируем, что у платформенных аккаунтов
+  // включён максимальный тариф «team» (упрощает тестирование команды).
+  if (userRow?.company_id) {
+    await service
+      .from("companies")
+      .update({ plan: "team" })
+      .eq("id", userRow.company_id)
+      .neq("plan", "team");
+    return;
+  }
 
   // Ищем существующую платформенную компанию
   const { data: existingCompany } = await service
