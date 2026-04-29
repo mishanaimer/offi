@@ -71,7 +71,9 @@ export function MascotLoader({
             stroke={bg}
             strokeWidth={stroke}
           />
-          {/* Активная дуга */}
+          {/* Активная дуга — крутится вокруг центра. transformOrigin в px,
+              т.к. transform-box: fill-box даёт неконсистентный результат
+              в Safari/iOS на SVGCircleElement. */}
           <circle
             ref={circleRef}
             cx={size / 2}
@@ -81,7 +83,10 @@ export function MascotLoader({
             stroke={color}
             strokeWidth={stroke}
             strokeLinecap="round"
-            style={{ animation: "mascot-loader-spin 1.8s cubic-bezier(0.6,0,0.4,1) infinite" }}
+            style={{
+              transformOrigin: `${size / 2}px ${size / 2}px`,
+              animation: "mascot-loader-spin 1.8s cubic-bezier(0.6,0,0.4,1) infinite",
+            }}
           />
         </svg>
         {/* Маскот — чуть уменьшен, чтобы не пересекать кольцо */}

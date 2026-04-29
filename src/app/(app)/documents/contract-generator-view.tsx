@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
+import { ProgressBar, type ProgressStage } from "@/components/ui/progress-bar";
 import {
+  AlertTriangle,
   Bold,
   Download,
   Eye,
   FileText,
+  GripVertical,
   Italic,
+  LayoutGrid,
   Pencil,
+  Plus,
   Redo2,
   Sparkles,
   Trash2,
@@ -35,7 +40,27 @@ type FieldDef = {
   type?: "text" | "textarea";
   hint?: string;
   required?: boolean;
+  /** Группа для отображения в редакторе. Если не задана — выводится по KNOWN_GROUPS-matcher. */
+  group?: string;
 };
+
+const ANALYZE_STAGES: ProgressStage[] = [
+  { id: "extract", label: "Распаковываю и нормализую договор…", weight: 0.12 },
+  { id: "ai", label: "ИИ ищет переменные части (контрагент, реквизиты, даты)…", weight: 0.76 },
+  { id: "save", label: "Сохраняю шаблон…", weight: 0.12 },
+];
+
+const PARSE_STAGES: ProgressStage[] = [
+  { id: "read", label: "Читаю файл и извлекаю текст…", weight: 0.2 },
+  { id: "ai", label: "ИИ распознаёт реквизиты…", weight: 0.7 },
+  { id: "apply", label: "Заполняю поля…", weight: 0.1 },
+];
+
+const GENERATE_STAGES: ProgressStage[] = [
+  { id: "validate", label: "Подставляю данные в шаблон…", weight: 0.4 },
+  { id: "render", label: "Собираю финальный .docx…", weight: 0.4 },
+  { id: "preview", label: "Готовлю превью…", weight: 0.2 },
+];
 
 type GenerateResp = {
   warnings: string[];
@@ -61,19 +86,25 @@ const KNOWN_GROUPS: { title: string; matcher: (k: string) => boolean }[] = [
   { title: "Услуга / точка", matcher: (k) => k.startsWith("service_") || k.startsWith("spec_") },
 ];
 
+/** Определяет имя группы для поля: явный f.group, иначе по matcher, иначе «Прочее». */
+function inferGroup(f: FieldDef): string {
+  if (f.group && f.group.trim()) return f.group;
+  return KNOWN_GROUPS.find((g) => g.matcher(f.key))?.title ?? "Прочее";
+}
+
 function groupFields(fields: FieldDef[]): { title: string; fields: FieldDef[] }[] {
   const buckets: Record<string, FieldDef[]> = {};
   const order: string[] = [];
-  const otherTitle = "Прочее";
   for (const f of fields) {
-    const grp = KNOWN_GROUPS.find((g) => g.matcher(f.key))?.title ?? otherTitle;
+    const grp = inferGroup(f);
     if (!buckets[grp]) {
       buckets[grp] = [];
       order.push(grp);
     }
     buckets[grp].push(f);
   }
-  // Стабильный порядок: known groups в порядке KNOWN_GROUPS, "прочее" в конце
+  // Стабильный порядок: known groups в порядке KNOWN_GROUPS, кастомные/«прочее» в конце
+  // в порядке появления.
   const known = KNOWN_GROUPS.map((g) => g.title);
   order.sort((a, b) => {
     const ai = known.indexOf(a);
@@ -84,6 +115,29 @@ function groupFields(fields: FieldDef[]): { title: string; fields: FieldDef[] }[
     return ai - bi;
   });
   return order.map((title) => ({ title, fields: buckets[title] }));
+}
+
+/** Уникальный slug-key из label, с защитой от коллизии. */
+function makeFieldKey(label: string, existing: Set<string>): string {
+  const base =
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9а-яё]+/giu, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 32) || "custom";
+  // Транслит для кириллицы — простой вариант.
+  const ru: Record<string, string> = {
+    а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"e",ж:"zh",з:"z",и:"i",й:"y",
+    к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",
+    х:"h",ц:"c",ч:"ch",ш:"sh",щ:"shch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya",
+  };
+  const slug = base.replace(/[а-яё]/g, (c) => ru[c] ?? "");
+  let key = slug || `custom_${Date.now().toString(36)}`;
+  let n = 1;
+  while (existing.has(key)) {
+    key = `${slug}_${n++}`;
+  }
+  return key;
 }
 
 export function ContractGeneratorView() {
@@ -117,6 +171,21 @@ export function ContractGeneratorView() {
 
   const cardFileRef = useRef<HTMLInputElement>(null);
   const [cardLoading, setCardLoading] = useState(false);
+
+  // Прогресс-этапы для разных операций (псевдо-стадии — сервер не стримит).
+  const [analyzeStage, setAnalyzeStage] = useState<string | null | "done">(null);
+  const [parseStage, setParseStage] = useState<string | null | "done">(null);
+  const [genStage, setGenStage] = useState<string | null | "done">(null);
+
+  // Drag-and-drop карточек полей.
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<{ group: string; beforeKey?: string } | null>(null);
+
+  // Pre-flight check перед генерацией (показ модалки с предупреждением).
+  const [preflightOpen, setPreflightOpen] = useState(false);
+
+  // Менеджер «Поля» (правая панель) — открыт по умолчанию на широких экранах.
+  const [showFieldsPanel, setShowFieldsPanel] = useState(true);
 
   async function refreshTemplates(autoSelect?: string) {
     setLoadingList(true);
@@ -234,7 +303,9 @@ export function ContractGeneratorView() {
       setParseStatus({ msg: "Сначала вставь текст", tone: "warn" });
       return;
     }
-    setParseStatus({ msg: "Распознаю (regex + ИИ)…", tone: "ok" });
+    setParseStatus(null);
+    setParseStage("read");
+    const t1 = setTimeout(() => setParseStage("ai"), 600);
     try {
       const r = await fetch("/api/documents/parse-card", {
         method: "POST",
@@ -242,6 +313,7 @@ export function ContractGeneratorView() {
         body: JSON.stringify({ text, fields: details?.fields ?? [] }),
       });
       if (!r.ok) throw new Error(await r.text());
+      setParseStage("apply");
       const j = (await r.json()) as {
         parsed: Record<string, string>;
         counts?: { regex: number; ai: number; total: number };
@@ -254,20 +326,28 @@ export function ContractGeneratorView() {
           : "Поля не найдены — проверь текст",
         tone: filled ? "ok" : "warn",
       });
+      setParseStage("done");
+      setTimeout(() => setParseStage(null), 700);
     } catch (e) {
       setParseStatus({ msg: "Ошибка: " + (e as Error).message, tone: "err" });
+      setParseStage(null);
+    } finally {
+      clearTimeout(t1);
     }
   }
 
   async function handleCardFile(file: File) {
     setCardLoading(true);
-    setParseStatus({ msg: `Читаю файл «${file.name}» и анализирую с ИИ…`, tone: "ok" });
+    setParseStatus(null);
+    setParseStage("read");
+    const t1 = setTimeout(() => setParseStage("ai"), 1200);
     try {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("fields", JSON.stringify(details?.fields ?? []));
       const r = await fetch("/api/documents/parse-card", { method: "POST", body: fd });
       if (!r.ok) throw new Error(await r.text());
+      setParseStage("apply");
       const j = (await r.json()) as {
         text: string;
         parsed: Record<string, string>;
@@ -282,18 +362,40 @@ export function ContractGeneratorView() {
           : `Из файла «${file.name}» извлечён текст, но реквизиты не распознались — проверь и добавь вручную`,
         tone: filled ? "ok" : "warn",
       });
+      setParseStage("done");
+      setTimeout(() => setParseStage(null), 700);
     } catch (e) {
       setParseStatus({ msg: "Ошибка: " + (e as Error).message, tone: "err" });
+      setParseStage(null);
     } finally {
+      clearTimeout(t1);
       setCardLoading(false);
     }
   }
 
+  // Список незаполненных обязательных полей (для pre-flight модалки).
+  const missingRequired = useMemo(() => {
+    if (!details) return [] as FieldDef[];
+    return details.fields.filter((f) => f.required && !((data[f.key] ?? "").trim()));
+  }, [details, data]);
+
+  function handleGenerateClick() {
+    if (missingRequired.length > 0) {
+      setPreflightOpen(true);
+      return;
+    }
+    void handleGenerate();
+  }
+
   async function handleGenerate() {
     if (!selectedId) return;
+    setPreflightOpen(false);
     setGenerating(true);
     setGenError(null);
     setGenResult(null);
+    setGenStage("validate");
+    const t1 = setTimeout(() => setGenStage("render"), 800);
+    let t2: ReturnType<typeof setTimeout> | null = null;
     try {
       const r = await fetch("/api/documents/generate", {
         method: "POST",
@@ -304,11 +406,17 @@ export function ContractGeneratorView() {
         const errText = await r.text();
         throw new Error(errText || "Ошибка генерации");
       }
+      setGenStage("preview");
       const result = (await r.json()) as GenerateResp;
       setGenResult(result);
+      setGenStage("done");
+      t2 = setTimeout(() => setGenStage(null), 700);
     } catch (e) {
       setGenError((e as Error).message);
+      setGenStage(null);
     } finally {
+      clearTimeout(t1);
+      if (t2) clearTimeout(t2);
       setGenerating(false);
     }
   }
@@ -337,8 +445,11 @@ export function ContractGeneratorView() {
       return;
     }
     setUploading(true);
-    setUploadStatus("Загружаю и анализирую договор… (10–30 сек)");
+    setUploadStatus(null);
     setNeedsMigration(false);
+    setAnalyzeStage("extract");
+    const t1 = setTimeout(() => setAnalyzeStage("ai"), 1500);
+    let t2: ReturnType<typeof setTimeout> | null = null;
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -351,6 +462,7 @@ export function ContractGeneratorView() {
         if (t.includes("contract_templates")) setNeedsMigration(true);
         throw new Error(t || "Ошибка загрузки");
       }
+      setAnalyzeStage("save");
       const j = (await r.json()) as {
         id: string;
         name: string;
@@ -363,9 +475,14 @@ export function ContractGeneratorView() {
           (j.warnings.length ? `, ${j.warnings.length} предупреждений` : "")
       );
       await refreshTemplates(j.id);
+      setAnalyzeStage("done");
+      t2 = setTimeout(() => setAnalyzeStage(null), 800);
     } catch (e) {
       setUploadStatus("Ошибка: " + (e as Error).message);
+      setAnalyzeStage(null);
     } finally {
+      clearTimeout(t1);
+      if (t2) clearTimeout(t2);
       setUploading(false);
     }
   }
@@ -402,6 +519,71 @@ export function ContractGeneratorView() {
     const newFields = details.fields.map((f) => (f.key === key ? { ...f, label: newLabel } : f));
     await persistFields(newFields);
     setEditingFieldKey(null);
+  }
+
+  /** Добавить новое placeholder-поле в указанную группу. Сразу включает inline-rename. */
+  async function handleAddField(groupTitle: string) {
+    if (!details) return;
+    const existing = new Set(details.fields.map((f) => f.key));
+    const label = "Новое поле";
+    const key = makeFieldKey(`custom_${groupTitle}`, existing);
+    const newField: FieldDef = { key, label, group: groupTitle, type: "text" };
+    // Вставляем в конец группы.
+    const next = [...details.fields];
+    let insertAt = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+      if (inferGroup(next[i]) === groupTitle) {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    next.splice(insertAt, 0, newField);
+    await persistFields(next);
+    setData((d) => ({ ...d, [key]: "" }));
+    setEditingFieldKey(key);
+    setEditingLabel(label);
+  }
+
+  /** Добавить новую группу с одним стартовым полем. */
+  async function handleAddGroup() {
+    if (!details) return;
+    const baseName = "Новая секция";
+    const existingTitles = new Set(groupedFields.map((g) => g.title));
+    let name = baseName;
+    let n = 2;
+    while (existingTitles.has(name)) name = `${baseName} ${n++}`;
+    const existingKeys = new Set(details.fields.map((f) => f.key));
+    const key = makeFieldKey(`custom_${name}`, existingKeys);
+    const newField: FieldDef = { key, label: "Новое поле", group: name, type: "text" };
+    await persistFields([...details.fields, newField]);
+    setData((d) => ({ ...d, [key]: "" }));
+    setEditingFieldKey(key);
+    setEditingLabel("Новое поле");
+  }
+
+  /** Перетаскивание: вставить srcKey в группу targetGroup перед beforeKey
+   *  (или в конец группы, если beforeKey не указан). */
+  async function moveField(srcKey: string, targetGroup: string, beforeKey?: string) {
+    if (!details) return;
+    if (srcKey === beforeKey) return;
+    const src = details.fields.find((f) => f.key === srcKey);
+    if (!src) return;
+    const updatedSrc: FieldDef = { ...src, group: targetGroup };
+    const remaining = details.fields.filter((f) => f.key !== srcKey);
+    let insertAt = remaining.length;
+    if (beforeKey) {
+      const bi = remaining.findIndex((f) => f.key === beforeKey);
+      if (bi >= 0) insertAt = bi;
+    } else {
+      // в конец группы
+      let lastInGroup = -1;
+      remaining.forEach((f, i) => {
+        if (inferGroup(f) === targetGroup) lastInGroup = i;
+      });
+      insertAt = lastInGroup + 1;
+    }
+    const next = [...remaining.slice(0, insertAt), updatedSrc, ...remaining.slice(insertAt)];
+    await persistFields(next);
   }
 
   // Собирает текст превью с восстановленными {{key}} вместо карточек.
@@ -511,7 +693,13 @@ export function ContractGeneratorView() {
   }
 
   return (
-    <div className="grid md:grid-cols-[300px_1fr] flex-1 overflow-hidden">
+    <div
+      className={`grid flex-1 overflow-hidden ${
+        details && showFieldsPanel
+          ? "md:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]"
+          : "md:grid-cols-[280px_minmax(0,1fr)]"
+      }`}
+    >
       {/* Sidebar */}
       <aside className="border-r border-border/60 overflow-y-auto md:min-h-0 flex flex-col">
         {/* Upload zone */}
@@ -519,8 +707,13 @@ export function ContractGeneratorView() {
           <div
             onDrop={onDrop}
             onDragOver={onDragOver}
-            onClick={() => fileInputRef.current?.click()}
-            className="rounded-xl border-2 border-dashed border-border hover:border-primary cursor-pointer p-4 flex flex-col items-center justify-center text-center transition gap-1 bg-muted/30 hover:bg-[hsl(var(--accent-brand-light))]"
+            onClick={() => !uploading && fileInputRef.current?.click()}
+            aria-disabled={uploading}
+            className={`rounded-xl border-2 border-dashed border-border p-4 flex flex-col items-center justify-center text-center transition gap-1 bg-muted/30 ${
+              uploading
+                ? "cursor-progress opacity-90"
+                : "hover:border-primary cursor-pointer hover:bg-[hsl(var(--accent-brand-light))]"
+            }`}
           >
             {uploading ? (
               <Sparkles className="w-5 h-5 text-primary animate-pulse" />
@@ -543,7 +736,12 @@ export function ContractGeneratorView() {
               e.target.value = "";
             }}
           />
-          {uploadStatus && (
+          {analyzeStage !== null && (
+            <div className="mt-3">
+              <ProgressBar stages={ANALYZE_STAGES} currentStageId={analyzeStage} />
+            </div>
+          )}
+          {uploadStatus && analyzeStage === null && (
             <div
               className={`mt-2 text-[11px] ${
                 uploadStatus.startsWith("Ошибка") ? "text-destructive" : "text-muted-foreground"
@@ -608,11 +806,22 @@ export function ContractGeneratorView() {
                     Полей: {details.fields.length}
                   </div>
                 </div>
-                {templatePreviewBase64 && (
-                  <Button variant="secondary" size="sm" onClick={() => setShowPreview(true)}>
-                    <Eye className="w-4 h-4" /> Посмотреть шаблон
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    variant={showFieldsPanel ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => setShowFieldsPanel((v) => !v)}
+                    className="hidden xl:inline-flex"
+                    title={showFieldsPanel ? "Скрыть менеджер полей" : "Показать менеджер полей"}
+                  >
+                    <LayoutGrid className="w-4 h-4" /> Поля
                   </Button>
-                )}
+                  {templatePreviewBase64 && (
+                    <Button variant="secondary" size="sm" onClick={() => setShowPreview(true)}>
+                      <Eye className="w-4 h-4" /> Посмотреть шаблон
+                    </Button>
+                  )}
+                </div>
               </div>
 
               {/* Paste-area + drop карточки */}
@@ -666,10 +875,10 @@ export function ContractGeneratorView() {
                   className="min-h-[120px] font-mono text-xs"
                 />
                 <div className="flex items-center gap-3">
-                  <Button variant="secondary" size="sm" onClick={handleParse}>
+                  <Button variant="secondary" size="sm" onClick={handleParse} disabled={parseStage !== null}>
                     <Sparkles className="w-4 h-4" /> Распознать и заполнить
                   </Button>
-                  {parseStatus && (
+                  {parseStatus && parseStage === null && (
                     <span
                       className={`text-xs ${
                         parseStatus.tone === "err"
@@ -683,6 +892,9 @@ export function ContractGeneratorView() {
                     </span>
                   )}
                 </div>
+                {parseStage !== null && (
+                  <ProgressBar stages={PARSE_STAGES} currentStageId={parseStage} />
+                )}
               </div>
 
               {/* Fields */}
@@ -784,16 +996,127 @@ export function ContractGeneratorView() {
               ))}
 
               {/* Action bar */}
-              <div className="sticky bottom-0 -mx-4 px-4 py-3 bg-background/85 backdrop-blur border-t border-border/60 flex items-center gap-3">
-                <Button onClick={handleGenerate} disabled={generating}>
-                  {generating ? "Генерирую…" : "Сгенерировать договор"}
-                </Button>
-                {genError && <span className="text-xs text-destructive">{genError}</span>}
+              <div className="sticky bottom-0 -mx-4 px-4 py-3 bg-background/85 backdrop-blur border-t border-border/60 flex flex-col gap-2.5">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button onClick={handleGenerateClick} disabled={generating}>
+                    {generating ? "Генерирую…" : "Сгенерировать договор"}
+                  </Button>
+                  {missingRequired.length > 0 && !generating && (
+                    <span className="text-xs text-yellow-700 dark:text-yellow-400 inline-flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      Не заполнено обязательных: {missingRequired.length}
+                    </span>
+                  )}
+                  {genError && <span className="text-xs text-destructive">{genError}</span>}
+                </div>
+                {genStage !== null && (
+                  <ProgressBar
+                    stages={GENERATE_STAGES}
+                    currentStageId={genStage}
+                    error={genError}
+                  />
+                )}
               </div>
             </>
           )}
         </div>
       </div>
+
+      {/* Right sidebar — менеджер полей (карточек). Виден на xl, можно скрыть кнопкой «Поля». */}
+      {details && showFieldsPanel && (
+        <aside className="hidden xl:flex flex-col border-l border-border/60 overflow-y-auto bg-muted/20">
+          <div className="px-4 py-3 border-b border-border/60 bg-background flex items-center justify-between gap-2 sticky top-0 z-10">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold flex items-center gap-2">
+                <LayoutGrid className="w-4 h-4 text-primary" /> Поля шаблона
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                Перетаскивай между секциями · кликни ✎ для переименования
+              </div>
+            </div>
+            <button
+              className="rounded-lg p-1.5 hover:bg-muted shrink-0"
+              onClick={() => setShowFieldsPanel(false)}
+              title="Скрыть"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="p-3 space-y-3">
+            {groupedFields.map((group) => (
+              <FieldGroupBlock
+                key={group.title}
+                title={group.title}
+                fields={group.fields}
+                editingFieldKey={editingFieldKey}
+                editingLabel={editingLabel}
+                setEditingFieldKey={setEditingFieldKey}
+                setEditingLabel={setEditingLabel}
+                onRename={handleRenameField}
+                onRemove={handleRemoveField}
+                onAddField={() => handleAddField(group.title)}
+                dragKey={dragKey}
+                setDragKey={setDragKey}
+                dropHint={dropHint}
+                setDropHint={setDropHint}
+                onDrop={(srcKey, beforeKey) => moveField(srcKey, group.title, beforeKey)}
+                missingRequired={missingRequired.map((f) => f.key)}
+              />
+            ))}
+
+            <button
+              onClick={handleAddGroup}
+              className="w-full rounded-xl border border-dashed border-border hover:border-primary hover:bg-[hsl(var(--accent-brand-light))] p-3 text-xs text-muted-foreground hover:text-foreground transition flex items-center justify-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" /> Добавить секцию
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* Pre-flight модалка — перед генерацией предупреждаем о незаполненных обязательных полях. */}
+      {preflightOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setPreflightOpen(false)}
+        >
+          <div
+            className="bg-background rounded-2xl shadow-xl max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center gap-2 p-4 border-b border-border/60">
+              <AlertTriangle className="w-5 h-5 text-yellow-600" />
+              <h3 className="text-base font-semibold">Не все обязательные поля заполнены</h3>
+            </header>
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+              <p className="text-sm text-muted-foreground">
+                В этих полях не указаны значения — в финальном документе на их месте останется
+                плейсхолдер. Можно сгенерировать как есть и дозаполнить вручную.
+              </p>
+              <ul className="text-sm space-y-1">
+                {missingRequired.slice(0, 12).map((f) => (
+                  <li key={f.key} className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 shrink-0" />
+                    <span className="truncate">{f.label}</span>
+                  </li>
+                ))}
+                {missingRequired.length > 12 && (
+                  <li className="text-xs text-muted-foreground">
+                    …и ещё {missingRequired.length - 12}
+                  </li>
+                )}
+              </ul>
+            </div>
+            <footer className="flex items-center justify-end gap-2 p-4 border-t border-border/60">
+              <Button variant="ghost" onClick={() => setPreflightOpen(false)}>
+                Заполнить
+              </Button>
+              <Button onClick={() => void handleGenerate()}>Сгенерировать как есть</Button>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {/* Template preview modal — постраничный рендер docx-preview */}
       {showPreview && (
@@ -1023,6 +1346,177 @@ function ToolbarButton({
     >
       {children}
     </button>
+  );
+}
+
+/* ===========================================================================
+ * FieldGroupBlock — компактная карточка-секция в правом сайдбаре. Поддерживает
+ * drag-drop карточек полей внутри секции и между секциями, inline-rename,
+ * удаление и добавление нового placeholder-поля.
+ * =======================================================================*/
+function FieldGroupBlock({
+  title,
+  fields,
+  editingFieldKey,
+  editingLabel,
+  setEditingFieldKey,
+  setEditingLabel,
+  onRename,
+  onRemove,
+  onAddField,
+  dragKey,
+  setDragKey,
+  dropHint,
+  setDropHint,
+  onDrop,
+  missingRequired,
+}: {
+  title: string;
+  fields: FieldDef[];
+  editingFieldKey: string | null;
+  editingLabel: string;
+  setEditingFieldKey: (k: string | null) => void;
+  setEditingLabel: (s: string) => void;
+  onRename: (key: string, label: string) => void | Promise<void>;
+  onRemove: (key: string) => void | Promise<void>;
+  onAddField: () => void | Promise<void>;
+  dragKey: string | null;
+  setDragKey: (k: string | null) => void;
+  dropHint: { group: string; beforeKey?: string } | null;
+  setDropHint: (v: { group: string; beforeKey?: string } | null) => void;
+  onDrop: (srcKey: string, beforeKey?: string) => void;
+  missingRequired: string[];
+}) {
+  const isOver =
+    dropHint?.group === title && dragKey !== null;
+
+  return (
+    <div
+      className={`rounded-xl border bg-background transition ${
+        isOver ? "border-primary ring-2 ring-primary/20" : "border-border/60"
+      }`}
+      onDragOver={(e) => {
+        if (!dragKey) return;
+        e.preventDefault();
+        // Если курсор над пустым местом в группе (не над конкретной карточкой) —
+        // подсвечиваем всю группу = drop в конец.
+        setDropHint({ group: title });
+      }}
+      onDragLeave={(e) => {
+        // Сбрасываем подсветку только если курсор реально вышел из контейнера.
+        if (e.currentTarget === e.target) setDropHint(null);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        if (!dragKey) return;
+        const beforeKey = dropHint?.group === title ? dropHint?.beforeKey : undefined;
+        onDrop(dragKey, beforeKey);
+        setDragKey(null);
+        setDropHint(null);
+      }}
+    >
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}{" "}
+          <span className="text-muted-foreground/60 normal-case font-normal">
+            · {fields.length}
+          </span>
+        </div>
+        <button
+          onClick={() => onAddField()}
+          className="text-[11px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-primary"
+          title="Добавить поле"
+        >
+          <Plus className="w-3 h-3" /> поле
+        </button>
+      </div>
+
+      <div className="p-1.5 space-y-1 min-h-[42px]">
+        {fields.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground/70 px-2 py-2">
+            Пусто. Перетащи карточку сюда или нажми «+ поле».
+          </div>
+        ) : (
+          fields.map((f) => {
+            const isEditing = editingFieldKey === f.key;
+            const isDragged = dragKey === f.key;
+            const showLineHint =
+              dropHint?.group === title && dropHint?.beforeKey === f.key && dragKey;
+            return (
+              <div key={f.key}>
+                {showLineHint && <div className="h-0.5 bg-primary/60 rounded mx-1" />}
+                <div
+                  draggable={!isEditing}
+                  onDragStart={(e) => {
+                    setDragKey(f.key);
+                    e.dataTransfer.effectAllowed = "move";
+                    // Без setData drag не работает в FF
+                    e.dataTransfer.setData("text/plain", f.key);
+                  }}
+                  onDragEnd={() => {
+                    setDragKey(null);
+                    setDropHint(null);
+                  }}
+                  onDragOver={(e) => {
+                    if (!dragKey || dragKey === f.key) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDropHint({ group: title, beforeKey: f.key });
+                  }}
+                  className={`group/card rounded-lg px-2 py-1.5 flex items-center gap-1.5 cursor-grab active:cursor-grabbing transition ${
+                    isDragged
+                      ? "opacity-40 bg-muted"
+                      : missingRequired.includes(f.key)
+                      ? "bg-yellow-50 dark:bg-yellow-950/20 hover:bg-yellow-100 dark:hover:bg-yellow-950/30"
+                      : "hover:bg-muted/60"
+                  }`}
+                >
+                  <GripVertical className="w-3 h-3 text-muted-foreground/50 shrink-0" />
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={editingLabel}
+                      onChange={(e) => setEditingLabel(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onRename(f.key, editingLabel);
+                        if (e.key === "Escape") setEditingFieldKey(null);
+                      }}
+                      onBlur={() => onRename(f.key, editingLabel)}
+                      className="text-xs flex-1 bg-card border border-primary rounded px-1.5 py-0.5 outline-none"
+                    />
+                  ) : (
+                    <>
+                      <span className="text-xs flex-1 truncate" title={`${f.label} · {{${f.key}}}`}>
+                        {f.label}
+                      </span>
+                      <div className="opacity-0 group-hover/card:opacity-100 transition flex items-center gap-0.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            setEditingFieldKey(f.key);
+                            setEditingLabel(f.label);
+                          }}
+                          className="p-0.5 rounded hover:bg-background text-muted-foreground hover:text-foreground"
+                          title="Переименовать"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => onRemove(f.key)}
+                          className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 
