@@ -767,14 +767,44 @@ export function ContractGeneratorView() {
   }
 
   // Собирает текст превью с восстановленными {{key}} вместо карточек.
+  // ВАЖНО: clone+innerText не работает — innerText на detached-элементе
+  // в Chrome требует layout и возвращает пусто. Поэтому ходим по живому
+  // DOM руками, эмулируя innerText: \n на границах блочных элементов
+  // и <br>, плейсхолдеры разворачиваем в `{{key}}` и не идём вглубь.
   function collectPreviewText(root: HTMLElement): string {
-    const clone = root.cloneNode(true) as HTMLElement;
-    clone.querySelectorAll(".tpl-placeholder").forEach((ph) => {
-      const key = ph.getAttribute("data-key");
-      if (key) ph.replaceWith(document.createTextNode(`{{${key}}}`));
-    });
-    // innerText сохраняет переносы строк по структуре DOM (paragraphs/breaks)
-    return (clone as HTMLElement).innerText;
+    const BLOCK_TAGS = new Set([
+      "P", "DIV", "TR", "LI", "SECTION", "ARTICLE",
+      "HEADER", "FOOTER", "MAIN", "ASIDE",
+      "H1", "H2", "H3", "H4", "H5", "H6",
+      "TABLE", "BLOCKQUOTE", "PRE", "FIGURE",
+    ]);
+    const out: string[] = [];
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out.push((node as Text).data);
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node as HTMLElement;
+      if (el.classList.contains("tpl-placeholder")) {
+        const key = el.getAttribute("data-key");
+        if (key) out.push(`{{${key}}}`);
+        return; // не идём в детей (там label/icon/× — служебные)
+      }
+      if (el.tagName === "BR") {
+        out.push("\n");
+        return;
+      }
+      const isBlock = BLOCK_TAGS.has(el.tagName);
+      for (const child of Array.from(el.childNodes)) walk(child);
+      if (isBlock) {
+        const last = out[out.length - 1] ?? "";
+        if (!last.endsWith("\n")) out.push("\n");
+      }
+    };
+    walk(root);
+    // 3+ переносов подряд → 2 (визуальный «пустой абзац»). Trim хвоста.
+    return out.join("").replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
   }
 
   function startEditingText() {
@@ -841,12 +871,14 @@ export function ContractGeneratorView() {
     const removedKeys = Array.from(origKeys).filter((k) => !editedKeys.has(k));
 
     if (edits.length === 0 && removedKeys.length === 0) {
-      setTextEditStatus("Изменений нет");
+      setTextEditStatus("Изменений нет — внеси правки и попробуй снова");
       return;
     }
     setSavingText(true);
     const totalOps = edits.length + removedKeys.length;
-    setTextEditStatus(`Сохраняю ${totalOps} правок…`);
+    setTextEditStatus(
+      `Сохраняю: ${edits.length} текстовых, ${removedKeys.length} удалений карточек…`
+    );
     try {
       const r = await fetch(`/api/documents/templates/${selectedId}/text-edit`, {
         method: "POST",
@@ -854,9 +886,22 @@ export function ContractGeneratorView() {
         body: JSON.stringify({ edits, removedKeys }),
       });
       if (!r.ok) throw new Error(await r.text());
-      const j = (await r.json()) as { applied: number; message?: string };
+      const j = (await r.json()) as {
+        applied: number;
+        dropped?: number;
+        notFound?: Array<{ old: string }>;
+        message?: string;
+      };
       if (j.applied > 0) {
-        setTextEditStatus(`✓ Сохранено правок: ${j.applied}`);
+        const parts: string[] = [];
+        const textApplied = j.applied - (j.dropped ?? 0);
+        if (textApplied > 0) parts.push(`${textApplied} правок`);
+        if (j.dropped) parts.push(`${j.dropped} карточек удалено`);
+        const tail =
+          j.notFound && j.notFound.length > 0
+            ? ` · не найдено: ${j.notFound.length}`
+            : "";
+        setTextEditStatus(`✓ Сохранено: ${parts.join(", ")}${tail}`);
         // Перерисуем превью + plain-text
         const pr = await fetch(`/api/documents/templates/${selectedId}/preview`);
         if (pr.ok) {
@@ -869,7 +914,14 @@ export function ContractGeneratorView() {
         }
         setEditMode(false);
       } else {
-        setTextEditStatus(j.message ?? "Не удалось применить правки — текст не найден в шаблоне");
+        const detail = j.notFound && j.notFound.length > 0
+          ? ` Не сошлись строки (${j.notFound.length}): «${j.notFound[0].old}…»`
+          : "";
+        setTextEditStatus(
+          (j.message ?? "Не удалось применить правки — текст не найден в шаблоне") +
+            detail +
+            ` (попробовано: ${totalOps})`
+        );
       }
     } catch (e) {
       setTextEditStatus("Ошибка: " + (e as Error).message);

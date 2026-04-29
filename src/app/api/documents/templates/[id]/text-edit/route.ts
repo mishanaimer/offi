@@ -75,13 +75,48 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     wts.push({ full: m[0], attrs: m[1] ?? "", text: m[2] });
   }
 
+  // Из существующих replacements (find→replace, где replace содержит {{key}})
+  // достаём sample-текст для каждого ключа. Это нужно потому, что в исходном
+  // XML стоит сэмпл («ООО Айсистемс»), а не {{key}} — и если пользователь в
+  // редакторе двигает плейсхолдер, диф приходит в форме «...{{key}}...»,
+  // которой в исходном XML нет. Через sampleByKey мы переводим обратно.
+  const placeholderRe = /\{\{(\w+)\}\}/g;
+  const wtSimple = /^<w:t(\s[^>]*)?>([^<]*)<\/w:t>$/;
+  const sampleByKey: Record<string, string> = {};
+  const existing0 = Array.isArray(resolved.config.replacements)
+    ? resolved.config.replacements
+    : [];
+  for (const rule of existing0) {
+    if (typeof rule.find !== "string" || typeof rule.replace !== "string") continue;
+    const mf = rule.find.match(wtSimple);
+    const mr = rule.replace.match(wtSimple);
+    if (!mf || !mr) continue;
+    const findText = decode(mf[2]);
+    const repText = decode(mr[2]);
+    placeholderRe.lastIndex = 0;
+    let mm: RegExpExecArray | null;
+    while ((mm = placeholderRe.exec(repText)) !== null) {
+      const key = mm[1];
+      if (sampleByKey[key]) continue; // первая встреча выигрывает
+      const before = repText.slice(0, mm.index);
+      const after = repText.slice(mm.index + mm[0].length);
+      if (findText.startsWith(before) && findText.endsWith(after)) {
+        const sample = findText.slice(before.length, findText.length - after.length);
+        if (sample) sampleByKey[key] = sample;
+      }
+    }
+  }
+
   type Rule = { find: string; replace: string; count: number | null };
   const newRules: Rule[] = [];
   const seen = new Set<string>();
+  const notFound: Array<{ old: string; reason: string }> = [];
   let applied = 0;
 
   for (const edit of edits) {
     let found = false;
+
+    // 1. Прямой поиск.
     for (const wt of wts) {
       const decoded = decode(wt.text);
       if (!decoded.includes(edit.old)) continue;
@@ -92,17 +127,49 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       newRules.push({ find: wt.full, replace: newWt, count: null });
       found = true;
     }
+
+    // 2. Фолбэк: заменяем {{key}} → sample и ищем заново. Это обрабатывает
+    // перемещение/удаление существующих плейсхолдеров — в исходном XML на
+    // их месте sample-текст.
+    if (!found && /\{\{\w+\}\}/.test(edit.old)) {
+      let translatedOld = edit.old;
+      let canTranslate = true;
+      placeholderRe.lastIndex = 0;
+      let mm: RegExpExecArray | null;
+      while ((mm = placeholderRe.exec(edit.old)) !== null) {
+        const k = mm[1];
+        const s = sampleByKey[k];
+        if (!s) {
+          canTranslate = false;
+          break;
+        }
+        translatedOld = translatedOld.split(`{{${k}}}`).join(s);
+      }
+      if (canTranslate) {
+        for (const wt of wts) {
+          const decoded = decode(wt.text);
+          if (!decoded.includes(translatedOld)) continue;
+          const replaced = decoded.split(translatedOld).join(edit.new);
+          const newWt = `<w:t${wt.attrs}>${escape(replaced)}</w:t>`;
+          if (seen.has(wt.full)) continue;
+          seen.add(wt.full);
+          newRules.push({ find: wt.full, replace: newWt, count: null });
+          found = true;
+        }
+      }
+    }
+
     if (found) applied++;
+    else notFound.push({ old: edit.old.slice(0, 80), reason: "не найдено в шаблоне" });
   }
 
   // Из существующих replacements выбрасываем правила для удалённых ключей —
   // ищем по `replace`, содержащему {{key}}.
-  const existing = Array.isArray(resolved.config.replacements) ? resolved.config.replacements : [];
   let dropped = 0;
-  let filtered = existing;
+  let filtered = existing0;
   if (removedKeys.length > 0) {
     const removedRe = new RegExp(`\\{\\{(?:${removedKeys.join("|")})\\}\\}`);
-    filtered = existing.filter((r) => {
+    filtered = existing0.filter((r) => {
       const drop = typeof r.replace === "string" && removedRe.test(r.replace);
       if (drop) dropped++;
       return !drop;
@@ -113,6 +180,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return Response.json({
       ok: true,
       applied: 0,
+      notFound,
       message:
         edits.length > 0
           ? "Изменения не найдены в тексте шаблона"
@@ -132,5 +200,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq("company_id", companyId);
   if (error) return new Response(error.message, { status: 500 });
 
-  return Response.json({ ok: true, applied: applied + dropped, dropped });
+  return Response.json({
+    ok: true,
+    applied: applied + dropped,
+    dropped,
+    notFound,
+  });
 }
