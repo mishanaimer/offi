@@ -266,3 +266,51 @@
 .tpl-placeholder-label {
   font-weight: 600;
 }
+
+/* В режиме редактирования карточки-плейсхолдеры можно перетаскивать и удалять. */
+.docx-preview-host.is-editing .tpl-placeholder {
+  cursor: grab;
+  position: relative;
+}
+.docx-preview-host.is-editing .tpl-placeholder:active {
+  cursor: grabbing;
+}
+.docx-preview-host.is-editing .tpl-placeholder.is-dragging {
+  opacity: 0.4;
+}
+.tpl-placeholder-delete {
+  display: none;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: hsl(var(--destructive));
+  color: white;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  border: 1.5px solid white;
+  user-select: none;
+  z-index: 2;
+}
+.docx-preview-host.is-editing .tpl-placeholder:hover .tpl-placeholder-delete {
+  display: inline-block;
+}
+/* Маркер позиции вставки при drag-over */
+.docx-preview-host.is-editing .tpl-drop-marker {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  vertical-align: middle;
+  background: hsl(var(--primary));
+  animation: tpl-drop-blink 0.7s ease-in-out infinite;
+  margin: 0 1px;
+}
+@keyframes tpl-drop-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

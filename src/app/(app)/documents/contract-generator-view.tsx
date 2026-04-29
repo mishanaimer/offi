@@ -184,8 +184,12 @@ export function ContractGeneratorView() {
   // Pre-flight check перед генерацией (показ модалки с предупреждением).
   const [preflightOpen, setPreflightOpen] = useState(false);
 
-  // Менеджер «Поля» (правая панель) — открыт по умолчанию на широких экранах.
+  // Менеджер «Поля» (панель внутри редактора шаблона) — открыт по умолчанию.
   const [showFieldsPanel, setShowFieldsPanel] = useState(true);
+
+  // Множество ключей плейсхолдеров, реально расставленных в документе.
+  // Считается по previewMountRef и пересчитывается при каждой операции DnD.
+  const [placeholdersInDoc, setPlaceholdersInDoc] = useState<Set<string>>(new Set());
 
   async function refreshTemplates(autoSelect?: string) {
     setLoadingList(true);
@@ -265,11 +269,69 @@ export function ContractGeneratorView() {
       const fieldsMap: Record<string, { label: string; type?: string }> = {};
       for (const f of details?.fields ?? []) fieldsMap[f.key] = { label: f.label, type: f.type };
       highlightPlaceholders(previewMountRef.current, fieldsMap);
+      refreshPlaceholdersInDoc();
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPreview, templatePreviewBase64, details]);
+
+  /** Когда вошли в edit mode — каждой расставленной карточке добавляем
+   *  draggable + кнопку удаления + обработчики. При выходе из edit mode —
+   *  снимаем (чтобы пользователь не мог случайно удалить в read-only). */
+  useEffect(() => {
+    if (!previewMountRef.current) return;
+    const root = previewMountRef.current;
+    const spans = Array.from(root.querySelectorAll<HTMLSpanElement>(".tpl-placeholder"));
+    if (editMode) {
+      // Перевешиваем как live-spans (в т.ч. созданные drop’ом — у них уже всё есть).
+      for (const span of spans) {
+        if (span.dataset.tplWired === "1") continue;
+        const key = span.getAttribute("data-key") ?? "";
+        if (!key) continue;
+        span.setAttribute("draggable", "true");
+        span.dataset.tplWired = "1";
+
+        const onDragStart = (e: DragEvent) => {
+          if (!e.dataTransfer) return;
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("application/x-tpl-key", key);
+          e.dataTransfer.setData("text/plain", `{{${key}}}`);
+          span.classList.add("is-dragging");
+          (window as any).__tplDragNode = span;
+        };
+        const onDragEnd = () => {
+          span.classList.remove("is-dragging");
+          (window as any).__tplDragNode = null;
+        };
+        span.addEventListener("dragstart", onDragStart);
+        span.addEventListener("dragend", onDragEnd);
+
+        if (!span.querySelector(".tpl-placeholder-delete")) {
+          const del = document.createElement("span");
+          del.className = "tpl-placeholder-delete";
+          del.textContent = "×";
+          del.title = "Убрать карточку из документа";
+          del.addEventListener("mousedown", (e) => e.preventDefault());
+          del.addEventListener("click", (e) => {
+            e.stopPropagation();
+            span.remove();
+            refreshPlaceholdersInDoc();
+          });
+          span.appendChild(del);
+        }
+      }
+    } else {
+      // Снимаем интерактив у всех карточек.
+      for (const span of spans) {
+        span.removeAttribute("draggable");
+        delete span.dataset.tplWired;
+        span.querySelector(".tpl-placeholder-delete")?.remove();
+        span.classList.remove("is-dragging");
+      }
+    }
+  }, [editMode, placeholdersInDoc]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -586,6 +648,124 @@ export function ContractGeneratorView() {
     await persistFields(next);
   }
 
+  /** Перечитывает DOM превью и обновляет placeholdersInDoc. */
+  function refreshPlaceholdersInDoc() {
+    if (!previewMountRef.current) return;
+    const set = new Set<string>();
+    previewMountRef.current.querySelectorAll(".tpl-placeholder").forEach((el) => {
+      const k = el.getAttribute("data-key");
+      if (k) set.add(k);
+    });
+    setPlaceholdersInDoc(set);
+  }
+
+  /** Создаёт DOM-узел плейсхолдера (как highlightPlaceholders), готовый к вставке. */
+  function buildPlaceholderEl(key: string, label: string): HTMLSpanElement {
+    const span = document.createElement("span");
+    span.className = "tpl-placeholder";
+    span.setAttribute("data-key", key);
+    span.setAttribute("contenteditable", "false");
+    span.setAttribute("draggable", "true");
+
+    const icon = document.createElement("span");
+    icon.className = "tpl-placeholder-icon";
+    icon.textContent = pickIconForKey(key);
+    span.appendChild(icon);
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "tpl-placeholder-label";
+    labelEl.textContent = label;
+    span.appendChild(labelEl);
+
+    const del = document.createElement("span");
+    del.className = "tpl-placeholder-delete";
+    del.textContent = "×";
+    del.title = "Убрать карточку из документа";
+    del.addEventListener("mousedown", (e) => e.preventDefault());
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      span.remove();
+      refreshPlaceholdersInDoc();
+    });
+    span.appendChild(del);
+
+    span.addEventListener("dragstart", (e) => {
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      dt.effectAllowed = "move";
+      dt.setData("application/x-tpl-key", key);
+      dt.setData("text/plain", `{{${key}}}`);
+      span.classList.add("is-dragging");
+      // Запоминаем «себя», чтобы при drop’е переместить, а не дублировать.
+      (window as any).__tplDragNode = span;
+    });
+    span.addEventListener("dragend", () => {
+      span.classList.remove("is-dragging");
+      (window as any).__tplDragNode = null;
+    });
+
+    return span;
+  }
+
+  /** Получает Range, соответствующий точке экрана (cross-browser). */
+  function caretRangeAt(x: number, y: number): Range | null {
+    const doc = document as unknown as {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    };
+    if (typeof doc.caretRangeFromPoint === "function") {
+      return doc.caretRangeFromPoint(x, y);
+    }
+    if (typeof doc.caretPositionFromPoint === "function") {
+      const pos = doc.caretPositionFromPoint(x, y);
+      if (pos) {
+        const r = document.createRange();
+        r.setStart(pos.offsetNode, pos.offset);
+        r.collapse(true);
+        return r;
+      }
+    }
+    return null;
+  }
+
+  /** Вставляет плейсхолдер по координатам drop-точки. Если карточка уже была
+   *  в документе — переносит существующий узел (move), иначе создаёт новый. */
+  function insertPlaceholderAt(clientX: number, clientY: number, key: string) {
+    if (!previewMountRef.current) return;
+    const range = caretRangeAt(clientX, clientY);
+    if (!range) return;
+    // Обрезаем range до пределов превью — мало ли что ловится.
+    if (!previewMountRef.current.contains(range.startContainer)) return;
+
+    const movingNode: HTMLSpanElement | null = (window as any).__tplDragNode ?? null;
+
+    let node: HTMLSpanElement;
+    if (movingNode && movingNode.getAttribute("data-key") === key && previewMountRef.current.contains(movingNode)) {
+      // Перенос существующей карточки — снимаем её из текущего места.
+      movingNode.parentNode?.removeChild(movingNode);
+      movingNode.classList.remove("is-dragging");
+      node = movingNode;
+    } else {
+      const fdef = details?.fields.find((f) => f.key === key);
+      const label = fdef?.label || key;
+      node = buildPlaceholderEl(key, label);
+    }
+
+    range.insertNode(node);
+    // Добавляем пробелы вокруг — иначе плейсхолдер сливается со словами.
+    if (node.previousSibling && node.previousSibling.nodeType === Node.TEXT_NODE) {
+      const prev = node.previousSibling as Text;
+      if (!/\s$/.test(prev.data)) prev.data += " ";
+    }
+    if (node.nextSibling && node.nextSibling.nodeType === Node.TEXT_NODE) {
+      const nxt = node.nextSibling as Text;
+      if (!/^\s/.test(nxt.data)) nxt.data = " " + nxt.data;
+    } else if (!node.nextSibling) {
+      node.parentNode?.appendChild(document.createTextNode(" "));
+    }
+    refreshPlaceholdersInDoc();
+  }
+
   // Собирает текст превью с восстановленными {{key}} вместо карточек.
   function collectPreviewText(root: HTMLElement): string {
     const clone = root.cloneNode(true) as HTMLElement;
@@ -619,7 +799,10 @@ export function ContractGeneratorView() {
     editSnapshotRef.current = "";
   }
 
-  // Простой построчный диф между двумя текстами с восстановленными {{key}}.
+  // Построчный диф между двумя текстами с восстановленными {{key}}.
+  // Плейсхолдеры в виде {{key}} стабильны (collectPreviewText всегда восстанавливает
+  // их одинаково), поэтому строки с {{ можно сравнивать как обычный текст —
+  // именно так сохраняются перемещения/удаления карточек в документе.
   function buildLineEdits(orig: string, edited: string): Array<{ old: string; new: string }> {
     const a = orig.split(/\r?\n/);
     const b = edited.split(/\r?\n/);
@@ -629,8 +812,6 @@ export function ContractGeneratorView() {
       const oa = a[i].trim();
       const ob = b[i].trim();
       if (!oa || oa === ob) continue;
-      // Не трогаем строки с плейсхолдерами — иначе сломаем поля.
-      if (oa.includes("{{") || ob.includes("{{")) continue;
       out.push({ old: oa, new: ob });
     }
     return out;
@@ -646,17 +827,31 @@ export function ContractGeneratorView() {
     if (!selectedId || !previewMountRef.current) return;
     const edited = collectPreviewText(previewMountRef.current);
     const edits = buildLineEdits(editSnapshotRef.current, edited);
-    if (edits.length === 0) {
+
+    // Какие плейсхолдеры исчезли из документа (удалены/перемещены) —
+    // их replacement-правила надо снести на сервере, иначе исходные образцы
+    // снова заменятся на {{key}} при генерации.
+    const placeholderRe = /\{\{(\w+)\}\}/g;
+    const origKeys = new Set<string>();
+    const editedKeys = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = placeholderRe.exec(editSnapshotRef.current)) !== null) origKeys.add(m[1]);
+    placeholderRe.lastIndex = 0;
+    while ((m = placeholderRe.exec(edited)) !== null) editedKeys.add(m[1]);
+    const removedKeys = Array.from(origKeys).filter((k) => !editedKeys.has(k));
+
+    if (edits.length === 0 && removedKeys.length === 0) {
       setTextEditStatus("Изменений нет");
       return;
     }
     setSavingText(true);
-    setTextEditStatus(`Сохраняю ${edits.length} правок…`);
+    const totalOps = edits.length + removedKeys.length;
+    setTextEditStatus(`Сохраняю ${totalOps} правок…`);
     try {
       const r = await fetch(`/api/documents/templates/${selectedId}/text-edit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ edits }),
+        body: JSON.stringify({ edits, removedKeys }),
       });
       if (!r.ok) throw new Error(await r.text());
       const j = (await r.json()) as { applied: number; message?: string };
@@ -693,13 +888,7 @@ export function ContractGeneratorView() {
   }
 
   return (
-    <div
-      className={`grid flex-1 overflow-hidden ${
-        details && showFieldsPanel
-          ? "md:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]"
-          : "md:grid-cols-[280px_minmax(0,1fr)]"
-      }`}
-    >
+    <div className="grid md:grid-cols-[280px_minmax(0,1fr)] flex-1 overflow-hidden">
       {/* Sidebar */}
       <aside className="border-r border-border/60 overflow-y-auto md:min-h-0 flex flex-col">
         {/* Upload zone */}
@@ -807,18 +996,9 @@ export function ContractGeneratorView() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    variant={showFieldsPanel ? "secondary" : "ghost"}
-                    size="sm"
-                    onClick={() => setShowFieldsPanel((v) => !v)}
-                    className="hidden xl:inline-flex"
-                    title={showFieldsPanel ? "Скрыть менеджер полей" : "Показать менеджер полей"}
-                  >
-                    <LayoutGrid className="w-4 h-4" /> Поля
-                  </Button>
                   {templatePreviewBase64 && (
                     <Button variant="secondary" size="sm" onClick={() => setShowPreview(true)}>
-                      <Eye className="w-4 h-4" /> Посмотреть шаблон
+                      <Eye className="w-4 h-4" /> Открыть редактор шаблона
                     </Button>
                   )}
                 </div>
@@ -1022,59 +1202,6 @@ export function ContractGeneratorView() {
         </div>
       </div>
 
-      {/* Right sidebar — менеджер полей (карточек). Виден на xl, можно скрыть кнопкой «Поля». */}
-      {details && showFieldsPanel && (
-        <aside className="hidden xl:flex flex-col border-l border-border/60 overflow-y-auto bg-muted/20">
-          <div className="px-4 py-3 border-b border-border/60 bg-background flex items-center justify-between gap-2 sticky top-0 z-10">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold flex items-center gap-2">
-                <LayoutGrid className="w-4 h-4 text-primary" /> Поля шаблона
-              </div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">
-                Перетаскивай между секциями · кликни ✎ для переименования
-              </div>
-            </div>
-            <button
-              className="rounded-lg p-1.5 hover:bg-muted shrink-0"
-              onClick={() => setShowFieldsPanel(false)}
-              title="Скрыть"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="p-3 space-y-3">
-            {groupedFields.map((group) => (
-              <FieldGroupBlock
-                key={group.title}
-                title={group.title}
-                fields={group.fields}
-                editingFieldKey={editingFieldKey}
-                editingLabel={editingLabel}
-                setEditingFieldKey={setEditingFieldKey}
-                setEditingLabel={setEditingLabel}
-                onRename={handleRenameField}
-                onRemove={handleRemoveField}
-                onAddField={() => handleAddField(group.title)}
-                dragKey={dragKey}
-                setDragKey={setDragKey}
-                dropHint={dropHint}
-                setDropHint={setDropHint}
-                onDrop={(srcKey, beforeKey) => moveField(srcKey, group.title, beforeKey)}
-                missingRequired={missingRequired.map((f) => f.key)}
-              />
-            ))}
-
-            <button
-              onClick={handleAddGroup}
-              className="w-full rounded-xl border border-dashed border-border hover:border-primary hover:bg-[hsl(var(--accent-brand-light))] p-3 text-xs text-muted-foreground hover:text-foreground transition flex items-center justify-center gap-1.5"
-            >
-              <Plus className="w-3.5 h-3.5" /> Добавить секцию
-            </button>
-          </div>
-        </aside>
-      )}
-
       {/* Pre-flight модалка — перед генерацией предупреждаем о незаполненных обязательных полях. */}
       {preflightOpen && (
         <div
@@ -1118,7 +1245,7 @@ export function ContractGeneratorView() {
         </div>
       )}
 
-      {/* Template preview modal — постраничный рендер docx-preview */}
+      {/* Редактор шаблона — постраничный рендер docx-preview + сайдбар-менеджер карточек */}
       {showPreview && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
@@ -1128,12 +1255,12 @@ export function ContractGeneratorView() {
           }}
         >
           <div
-            className="bg-[#e8eaed] rounded-2xl shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col"
+            className="bg-[#e8eaed] rounded-2xl shadow-xl w-full max-w-7xl max-h-[94vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <header className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-background rounded-t-2xl gap-3">
               <div className="min-w-0">
-                <h2 className="text-base font-semibold truncate">Шаблон договора</h2>
+                <h2 className="text-base font-semibold truncate">Редактор шаблона</h2>
                 {details && (
                   <div className="text-xs text-muted-foreground mt-0.5 truncate">
                     {details.name} · {details.fields.length} полей
@@ -1148,7 +1275,7 @@ export function ContractGeneratorView() {
                     onClick={startEditingText}
                     disabled={templatePlainText == null}
                   >
-                    <Pencil className="w-4 h-4" /> Редактировать текст
+                    <Pencil className="w-4 h-4" /> Редактировать
                   </Button>
                 ) : (
                   <>
@@ -1156,9 +1283,19 @@ export function ContractGeneratorView() {
                       Отмена
                     </Button>
                     <Button size="sm" onClick={saveEditingText} disabled={savingText}>
-                      {savingText ? "Сохраняю…" : "Сохранить правки"}
+                      {savingText ? "Сохраняю…" : "Сохранить"}
                     </Button>
                   </>
+                )}
+                {editMode && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowFieldsPanel((v) => !v)}
+                    title={showFieldsPanel ? "Скрыть панель полей" : "Показать панель полей"}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </Button>
                 )}
                 <button
                   className="rounded-lg p-1.5 hover:bg-muted"
@@ -1191,7 +1328,8 @@ export function ContractGeneratorView() {
                   <Redo2 className="w-4 h-4" />
                 </ToolbarButton>
                 <div className="ml-auto text-[11px] text-muted-foreground">
-                  Кликни в текст и редактируй прямо здесь. Поля-карточки трогать нельзя — они подставятся при генерации.
+                  Перетаскивай карточки полей из панели в текст, либо двигай прямо в документе.
+                  Удалить карточку — навести и кликнуть «✕».
                 </div>
               </div>
             )}
@@ -1210,16 +1348,86 @@ export function ContractGeneratorView() {
               </div>
             )}
 
-            <div className="flex-1 overflow-auto p-6 flex justify-center">
-              {!templatePreviewBase64 ? (
-                <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
-              ) : (
-                <div
-                  ref={previewMountRef}
-                  className={`docx-preview-host ${editMode ? "is-editing" : ""}`}
-                  spellCheck={editMode}
-                  suppressContentEditableWarning
-                />
+            {/* Editor body: документ + (в edit mode) сайдбар карточек справа */}
+            <div className="flex-1 min-h-0 grid"
+              style={{
+                gridTemplateColumns:
+                  editMode && showFieldsPanel ? "minmax(0,1fr) 320px" : "minmax(0,1fr)",
+              }}
+            >
+              <div
+                className="overflow-auto p-6 flex justify-center"
+                onDragOver={(e) => {
+                  if (!editMode) return;
+                  if (!dragKey && !e.dataTransfer.types.includes("application/x-tpl-key")) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(e) => {
+                  if (!editMode) return;
+                  const key =
+                    e.dataTransfer.getData("application/x-tpl-key") || dragKey || "";
+                  if (!key) return;
+                  e.preventDefault();
+                  insertPlaceholderAt(e.clientX, e.clientY, key);
+                  setDragKey(null);
+                }}
+              >
+                {!templatePreviewBase64 ? (
+                  <div className="text-sm text-muted-foreground self-center">Готовлю превью…</div>
+                ) : (
+                  <div
+                    ref={previewMountRef}
+                    className={`docx-preview-host ${editMode ? "is-editing" : ""}`}
+                    spellCheck={editMode}
+                    suppressContentEditableWarning
+                  />
+                )}
+              </div>
+
+              {editMode && showFieldsPanel && details && (
+                <aside className="border-l border-border/60 bg-background overflow-y-auto">
+                  <div className="px-3 py-2.5 border-b border-border/60 sticky top-0 bg-background z-10">
+                    <div className="text-sm font-semibold flex items-center gap-2">
+                      <LayoutGrid className="w-4 h-4 text-primary" /> Карточки полей
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                      Перетащи карточку прямо в документ — она вставится в позиции курсора.
+                      Уже расставленные плейсхолдеры тоже можно перетаскивать и удалять.
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 space-y-2.5">
+                    {groupedFields.map((group) => (
+                      <FieldGroupBlock
+                        key={group.title}
+                        title={group.title}
+                        fields={group.fields}
+                        editingFieldKey={editingFieldKey}
+                        editingLabel={editingLabel}
+                        setEditingFieldKey={setEditingFieldKey}
+                        setEditingLabel={setEditingLabel}
+                        onRename={handleRenameField}
+                        onRemove={handleRemoveField}
+                        onAddField={() => handleAddField(group.title)}
+                        dragKey={dragKey}
+                        setDragKey={setDragKey}
+                        dropHint={dropHint}
+                        setDropHint={setDropHint}
+                        onDrop={(srcKey, beforeKey) => moveField(srcKey, group.title, beforeKey)}
+                        missingRequired={missingRequired.map((f) => f.key)}
+                        usedKeys={placeholdersInDoc}
+                      />
+                    ))}
+
+                    <button
+                      onClick={handleAddGroup}
+                      className="w-full rounded-xl border border-dashed border-border hover:border-primary hover:bg-[hsl(var(--accent-brand-light))] p-2.5 text-xs text-muted-foreground hover:text-foreground transition flex items-center justify-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Добавить секцию
+                    </button>
+                  </div>
+                </aside>
               )}
             </div>
           </div>
@@ -1370,6 +1578,7 @@ function FieldGroupBlock({
   setDropHint,
   onDrop,
   missingRequired,
+  usedKeys,
 }: {
   title: string;
   fields: FieldDef[];
@@ -1386,6 +1595,8 @@ function FieldGroupBlock({
   setDropHint: (v: { group: string; beforeKey?: string } | null) => void;
   onDrop: (srcKey: string, beforeKey?: string) => void;
   missingRequired: string[];
+  /** Какие ключи уже расставлены в документе — для отметки «● в тексте». */
+  usedKeys?: Set<string>;
 }) {
   const isOver =
     dropHint?.group === title && dragKey !== null;
@@ -1450,8 +1661,10 @@ function FieldGroupBlock({
                   onDragStart={(e) => {
                     setDragKey(f.key);
                     e.dataTransfer.effectAllowed = "move";
-                    // Без setData drag не работает в FF
-                    e.dataTransfer.setData("text/plain", f.key);
+                    // Кастомный mime — чтобы редактор узнал «своего» при drop в doc
+                    e.dataTransfer.setData("application/x-tpl-key", f.key);
+                    // Без text/plain drag не работает в FF
+                    e.dataTransfer.setData("text/plain", `{{${f.key}}}`);
                   }}
                   onDragEnd={() => {
                     setDragKey(null);
@@ -1486,6 +1699,16 @@ function FieldGroupBlock({
                     />
                   ) : (
                     <>
+                      {usedKeys && (
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            usedKeys.has(f.key)
+                              ? "bg-primary"
+                              : "bg-border"
+                          }`}
+                          title={usedKeys.has(f.key) ? "Расставлено в документе" : "Не вставлено — перетащи в текст"}
+                        />
+                      )}
                       <span className="text-xs flex-1 truncate" title={`${f.label} · {{${f.key}}}`}>
                         {f.label}
                       </span>

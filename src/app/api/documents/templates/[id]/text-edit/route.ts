@@ -5,12 +5,18 @@ import { resolveTemplate } from "@/lib/contract-generator/registry";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-// Сохраняет текстовые правки шаблона: набор пар { old, new }, которые
-// применяются как обычные replacement-правила к word/document.xml.
-// Это даёт пользователю «поправить опечатку» / «изменить формулировку»
-// без ломания таблицы плейсхолдеров.
+// Сохраняет правки шаблона:
+//  - edits: [{ old, new }] — построчные текстовые правки (применяются как
+//    replacement-правила к <w:t>...</w:t> в word/document.xml).
+//  - removedKeys: string[] — ключи плейсхолдеров, которые пользователь
+//    удалил из документа в редакторе. Для них из config.replacements
+//    выкидываем все правила, чей `replace` содержит {{key}}, иначе на
+//    генерации эти поля снова появятся в старых местах.
 //
-// Body: { edits: [{ old: string, new: string }] }
+// Это даёт пользователю «поправить опечатку», «изменить формулировку»
+// и «удалить/переместить карточку» без ручного редактирования XML.
+//
+// Body: { edits?: [{old, new}], removedKeys?: string[] }
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -23,11 +29,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const companyId = (profile?.company_id as string) ?? null;
   if (!companyId) return new Response("no company", { status: 400 });
 
-  const body = (await req.json()) as { edits?: Array<{ old: string; new: string }> };
+  const body = (await req.json()) as {
+    edits?: Array<{ old: string; new: string }>;
+    removedKeys?: string[];
+  };
   const edits = (body.edits ?? []).filter(
     (e) => e && typeof e.old === "string" && typeof e.new === "string" && e.old !== e.new
   );
-  if (edits.length === 0) return Response.json({ ok: true, applied: 0 });
+  const removedKeys = (body.removedKeys ?? []).filter(
+    (k) => typeof k === "string" && /^\w+$/.test(k)
+  );
+  if (edits.length === 0 && removedKeys.length === 0) {
+    return Response.json({ ok: true, applied: 0 });
+  }
 
   // Загружаем текущие данные шаблона, чтобы понять что в нём есть.
   let resolved;
@@ -81,16 +95,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (found) applied++;
   }
 
-  if (newRules.length === 0) {
-    return Response.json({ ok: true, applied: 0, message: "Изменения не найдены в тексте шаблона" });
+  // Из существующих replacements выбрасываем правила для удалённых ключей —
+  // ищем по `replace`, содержащему {{key}}.
+  const existing = Array.isArray(resolved.config.replacements) ? resolved.config.replacements : [];
+  let dropped = 0;
+  let filtered = existing;
+  if (removedKeys.length > 0) {
+    const removedRe = new RegExp(`\\{\\{(?:${removedKeys.join("|")})\\}\\}`);
+    filtered = existing.filter((r) => {
+      const drop = typeof r.replace === "string" && removedRe.test(r.replace);
+      if (drop) dropped++;
+      return !drop;
+    });
   }
 
-  // Дописываем правила в начало replacements чтобы текстовые правки
-  // применялись ДО полевых замен (поля в текущем XML могут перекрываться
-  // с правкой и тогда правка съест плейсхолдер; добавляя в начало,
-  // мы переписываем текст один раз, а поле остаётся видно).
-  const existing = Array.isArray(resolved.config.replacements) ? resolved.config.replacements : [];
-  const merged = [...newRules, ...existing];
+  if (newRules.length === 0 && dropped === 0) {
+    return Response.json({
+      ok: true,
+      applied: 0,
+      message:
+        edits.length > 0
+          ? "Изменения не найдены в тексте шаблона"
+          : "Нечего сохранять",
+    });
+  }
+
+  // Дописываем новые правила в начало — текстовые правки применяются ДО
+  // полевых замен (так правка не съедает плейсхолдер).
+  const merged = [...newRules, ...filtered];
 
   const service = createServiceClient();
   const { error } = await service
@@ -100,5 +132,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq("company_id", companyId);
   if (error) return new Response(error.message, { status: 500 });
 
-  return Response.json({ ok: true, applied });
+  return Response.json({ ok: true, applied: applied + dropped, dropped });
 }
