@@ -181,6 +181,45 @@ export const ACTION_TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "create_client",
+      description:
+        "Создать нового клиента в CRM. Заполни как можно больше известных полей — реквизиты, контакты, подписанта, статус. Не выдумывай ИНН/банк — только то, что сообщил пользователь. После создания в карточку автоматически добавится заметка.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Название (как зовём компанию или клиента)" },
+          short_name: { type: "string" },
+          legal_name: { type: "string" },
+          client_type: { type: "string", enum: ["legal", "individual"] },
+          contact: { type: "string", description: "Контактное лицо (ФИО)" },
+          phone: { type: "string" },
+          email: { type: "string" },
+          telegram: { type: "string" },
+          website: { type: "string" },
+          industry: { type: "string" },
+          inn: { type: "string" },
+          kpp: { type: "string" },
+          ogrn: { type: "string" },
+          bank_name: { type: "string" },
+          bank_account: { type: "string" },
+          corr_account: { type: "string" },
+          bik: { type: "string" },
+          legal_address: { type: "string" },
+          actual_address: { type: "string" },
+          signatory_name: { type: "string" },
+          signatory_title: { type: "string" },
+          signatory_basis: { type: "string" },
+          status: { type: "string", enum: ["lead", "active", "partner", "archived"] },
+          tags: { type: "array", items: { type: "string" } },
+          summary: { type: "string", description: "1–2 предложения чем занимается клиент / зачем нам важен" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "save_client_note",
       description:
         "Добавить заметку (запись в историю общения) к карточке клиента. Используй, когда пользователь даёт информацию о звонке, встрече, договорённости — а полноценный fact для памяти не подходит.",
@@ -195,6 +234,63 @@ export const ACTION_TOOLS = [
           },
         },
         required: ["client_id", "content"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "list_text_templates",
+      description:
+        "Перечислить ТЕКСТОВЫЕ шаблоны компании (для писем, КП, типовых ответов). Не путать с DOCX-договорами — для них list_contract_templates.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "create_text_template",
+      description:
+        "Создать текстовый шаблон письма / КП / ответа. В body можно использовать markdown (**жирный**, заголовки, списки, картинки ![alt](url)) и переменные {{client.greeting}}, {{client.name}}, {{client.email}}, {{client.legal_name}}, {{client.inn}}, {{user.name}}, {{date}} и т.д. ВАЖНО: для приветствия используй {{client.greeting}} — он вернёт имя контактного лица если оно есть, иначе короткое название клиента. Не пиши фиксированные имена клиентов в шаблон.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Название шаблона (напр., «Холодное письмо»)" },
+          body: {
+            type: "string",
+            description:
+              "Текст шаблона с переменными {{client.greeting}}, {{client.name}} и т.п. Можно markdown.",
+          },
+        },
+        required: ["name", "body"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "update_text_template",
+      description: "Обновить существующий текстовый шаблон (имя или тело).",
+      parameters: {
+        type: "object",
+        properties: {
+          template_id: { type: "string" },
+          name: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["template_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "delete_text_template",
+      description: "Удалить текстовый шаблон по id.",
+      parameters: {
+        type: "object",
+        properties: { template_id: { type: "string" } },
+        required: ["template_id"],
       },
     },
   },
@@ -276,5 +372,11 @@ export const AUTO_RUN_TOOLS = new Set<string>([
   "list_clients",
   "list_contract_templates",
   "list_contracts",
+  "list_text_templates",
+  "create_text_template",
+  "update_text_template",
+  "create_client",
+  "update_client",
+  "save_client_note",
   "remember_fact",
 ]);

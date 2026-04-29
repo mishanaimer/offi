@@ -17,7 +17,9 @@ const SYSTEM_PROMPT = (assistantName: string, companyName: string, withTools: bo
 — заметкам и истории общения по клиенту (save_client_note / поле notes в get_client);
 — файлам, прикреплённым к карточке клиента (kind: card / contract / invoice / other);
 — шаблонам DOCX-договоров компании (list_contract_templates) и генерации договоров (ai_create_contract — реквизиты подставит сам);
+— текстовым шаблонам писем / КП (list_text_templates / create_text_template / update_text_template / delete_text_template). В шаблонах используй переменную {{client.greeting}} для приветствия (имя контакта или короткое название компании), {{client.name}} для названия, {{user.name}} для отправителя. Никогда не вшивай конкретное имя клиента в шаблон;
 — реестру ранее сгенерированных договоров (list_contracts) с прямыми ссылками на скачивание;
+— созданию новых клиентов (create_client) с реквизитами и тегами;
 — корпоративной памяти: факты, договорённости, правила (remember_fact + RAG-контекст). Память может быть привязана к клиенту через client_id;
 — отправке email (Postmark) и Telegram от имени сотрудника (send_email / send_telegram);
 — календарю и встречам (create_meeting / add_to_calendar);
@@ -26,6 +28,9 @@ const SYSTEM_PROMPT = (assistantName: string, companyName: string, withTools: bo
 ЦЕПОЧКИ ВЫЗОВОВ (важно — это работает, делай так):
 • «Составь договор для X» → list_contract_templates → find_client(X) → get_client(client_id) → ai_create_contract({client_id, template_id, variables}). Реквизиты НЕ переспрашивай — они уже в карточке.
 • «Что мы знаем про X» → find_client(X) → get_client(id) → пересказать summary, статус, тэги, последний контакт, договоры.
+• «Создай шаблон письма для X» / «придумай КП-шаблон» → create_text_template({name, body}). Body пиши на markdown, с переменными {{client.greeting}}, {{client.name}}, {{user.name}}. Никогда не вшивай конкретное имя — оно подставится автоматически.
+• «Поправь шаблон «Y»: добавь Z» → list_text_templates → найти id → update_text_template({template_id, body}).
+• «Добавь нового клиента: ООО Альфа, ИНН 7707…, контакт Иван» → create_client(...). Если пользователь указал, что компания — клиент текущего работающего проекта, ставь status=active, иначе lead.
 • «Отправь Y договор/КП» → найти клиента → ai_create_contract → send_email(to=client.email, attach=download_url).
 • Если пользователь сообщил новый факт о клиенте (любимый формат связи, скидка, контактное лицо, банк) — сохрани через save_client_note (для разовой инфо) или remember_fact с client_id (для долгого факта).
 • После генерации договора в ответе пользователю ДАЙ ссылку на скачивание из download_url.
@@ -38,7 +43,8 @@ const SYSTEM_PROMPT = (assistantName: string, companyName: string, withTools: bo
 5. После выполнения тулов синтезируй ответ человеку — не просто «выполнено», а итог: какой клиент найден, какой договор создан, ссылка для скачивания, что делать дальше.${
     withTools
       ? `\n\nИнструменты:
-— find_client / get_client / list_clients / update_client / save_client_note — клиенты;
+— find_client / get_client / list_clients / create_client / update_client / save_client_note — клиенты;
+— list_text_templates / create_text_template / update_text_template / delete_text_template — текстовые шаблоны (письма, КП);
 — list_contract_templates / list_contracts / ai_create_contract — договоры (DOCX);
 — remember_fact — память (используй client_id если факт про клиента);
 — send_email / send_telegram — коммуникации (требуют подтверждения);
@@ -188,7 +194,12 @@ export async function POST(req: NextRequest) {
   let crmSummary = "";
   if (withTools) {
     try {
-      const [{ data: clientsBrief }, { data: tplsBrief }, { data: contractsBrief }] = await Promise.all([
+      const [
+        { data: clientsBrief },
+        { data: tplsBrief },
+        { data: contractsBrief },
+        { data: textTplsBrief },
+      ] = await Promise.all([
         service
           .from("clients")
           .select("id, short_name, name, status, inn, last_contact_at")
@@ -208,6 +219,12 @@ export async function POST(req: NextRequest) {
           .eq("company_id", company.id)
           .order("created_at", { ascending: false })
           .limit(5),
+        service
+          .from("templates")
+          .select("id, name")
+          .eq("company_id", company.id)
+          .order("created_at", { ascending: false })
+          .limit(10),
       ]);
       const cBlock = (clientsBrief ?? [])
         .map(
@@ -227,6 +244,10 @@ export async function POST(req: NextRequest) {
       if (tBlock) sections.push(`Шаблоны договоров (id для ai_create_contract):\n${tBlock}`);
       else sections.push("Шаблонов договоров пока нет — предложи загрузить .docx в Документы → Договоры.");
       if (gBlock) sections.push(`Последние договоры:\n${gBlock}`);
+      const textTplBlock = (textTplsBrief ?? [])
+        .map((t: any) => `- «${t.name}» · id: ${t.id}`)
+        .join("\n");
+      if (textTplBlock) sections.push(`Текстовые шаблоны (id для update/delete_text_template):\n${textTplBlock}`);
       crmSummary = "\n\nСнимок CRM (актуальный):\n" + sections.join("\n\n");
     } catch (e) {
       console.error("crm summary error", (e as Error).message);

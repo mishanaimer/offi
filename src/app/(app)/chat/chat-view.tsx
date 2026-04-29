@@ -942,8 +942,13 @@ const TOOL_LABELS: Record<string, string> = {
   find_client: "Найти клиента",
   get_client: "Карточка клиента",
   list_clients: "Список клиентов",
+  create_client: "Создать клиента",
   update_client: "Обновить клиента",
   save_client_note: "Заметка по клиенту",
+  list_text_templates: "Шаблоны писем",
+  create_text_template: "Создать шаблон",
+  update_text_template: "Обновить шаблон",
+  delete_text_template: "Удалить шаблон",
   list_contract_templates: "Шаблоны договоров",
   list_contracts: "Список договоров",
   ai_create_contract: "Составить договор",
@@ -959,8 +964,13 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   find_client: Search,
   get_client: Search,
   list_clients: Search,
+  create_client: Sparkles,
   update_client: Sparkles,
   save_client_note: Brain,
+  list_text_templates: FileText,
+  create_text_template: Sparkles,
+  update_text_template: Sparkles,
+  delete_text_template: FileText,
   list_contract_templates: FileText,
   list_contracts: FileText,
   ai_create_contract: FileText,
@@ -1113,6 +1123,21 @@ function ToolCallCard({ call, onRun }: { call: ToolCall; onRun?: () => void }) {
           {call.name === "list_contracts" && Array.isArray(call.result?.contracts) && (
             <div className="text-[11px] text-emerald-900/80">
               Договоров: {call.result.contracts.length}
+            </div>
+          )}
+          {call.name === "create_client" && call.result?.client && (
+            <div className="text-[11px] text-emerald-900/80">
+              Создан клиент: <b>{call.result.client.short_name || call.result.client.name}</b>
+            </div>
+          )}
+          {call.name === "create_text_template" && call.result?.template && (
+            <div className="text-[11px] text-emerald-900/80">
+              Создан шаблон: <b>{call.result.template.name}</b>
+            </div>
+          )}
+          {call.name === "update_text_template" && call.result?.template && (
+            <div className="text-[11px] text-emerald-900/80">
+              Обновлён шаблон: <b>{call.result.template.name}</b>
             </div>
           )}
         </div>

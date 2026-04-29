@@ -14,6 +14,7 @@ import {
   pickClientFields,
   type ClientFull,
 } from "@/lib/clients";
+import { renderTextTemplate } from "@/lib/template-render";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -389,15 +390,136 @@ export async function POST(req: NextRequest) {
           break;
         }
         const { data: client } = client_id
-          ? await supabase.from("clients").select("*").eq("id", client_id).single()
+          ? await supabase.from("clients").select(CLIENT_FULL_COLUMNS).eq("id", client_id).single()
           : { data: null };
-        const content = render(tpl.body, client, variables ?? {});
+        const { data: profileRow } = await supabase
+          .from("users")
+          .select("full_name, email, company:companies(name, assistant_name)")
+          .eq("id", user.id)
+          .single();
+        const meCompany = (profileRow as any)?.company ?? null;
+        const content = renderTextTemplate(tpl.body, {
+          client: client ?? null,
+          user: profileRow
+            ? { full_name: (profileRow as any).full_name, email: (profileRow as any).email }
+            : null,
+          company: meCompany,
+          extra: (variables ?? {}) as Record<string, unknown>,
+        });
         const { data: saved } = await service
           .from("generated_docs")
           .insert({ company_id: companyId, client_id: client_id ?? null, template_id, content })
           .select()
           .single();
         result = { ok: true, doc_id: saved?.id, content };
+        break;
+      }
+
+      case "list_text_templates": {
+        const { data, error } = await supabase
+          .from("templates")
+          .select("id, name, body, updated_at, created_at")
+          .order("updated_at", { ascending: false, nullsFirst: false })
+          .order("created_at", { ascending: false })
+          .limit(50);
+        result = error
+          ? { ok: false, error: error.message }
+          : {
+              ok: true,
+              count: data?.length ?? 0,
+              templates: (data ?? []).map((t: any) => ({
+                id: t.id,
+                name: t.name,
+                preview: String(t.body ?? "").slice(0, 200),
+                updated_at: t.updated_at ?? t.created_at,
+              })),
+            };
+        break;
+      }
+
+      case "create_text_template": {
+        const params = body.params as any;
+        const name = String(params.name ?? "").trim();
+        const tplBody = String(params.body ?? "");
+        if (!name || !tplBody.trim()) {
+          result = { ok: false, error: "name and body required" };
+          break;
+        }
+        const { data, error } = await supabase
+          .from("templates")
+          .insert({ name, body: tplBody })
+          .select("id, name, body, created_at, updated_at")
+          .single();
+        result = error ? { ok: false, error: error.message } : { ok: true, template: data };
+        break;
+      }
+
+      case "update_text_template": {
+        const params = body.params as any;
+        const id = String(params.template_id ?? params.id ?? "");
+        if (!id) {
+          result = { ok: false, error: "template_id required" };
+          break;
+        }
+        const update: Record<string, unknown> = {};
+        if (typeof params.name === "string" && params.name.trim()) update.name = params.name.trim();
+        if (typeof params.body === "string") update.body = params.body;
+        if (Object.keys(update).length === 0) {
+          result = { ok: false, error: "nothing to update" };
+          break;
+        }
+        const { data, error } = await supabase
+          .from("templates")
+          .update(update)
+          .eq("id", id)
+          .select("id, name, body, created_at, updated_at")
+          .single();
+        result = error ? { ok: false, error: error.message } : { ok: true, template: data };
+        break;
+      }
+
+      case "delete_text_template": {
+        const id = String((body.params as any).template_id ?? (body.params as any).id ?? "");
+        if (!id) {
+          result = { ok: false, error: "template_id required" };
+          break;
+        }
+        const { error } = await supabase.from("templates").delete().eq("id", id);
+        result = error ? { ok: false, error: error.message } : { ok: true };
+        break;
+      }
+
+      case "create_client": {
+        const params = body.params as any;
+        const fields = pickClientFields(params);
+        const name = (fields.name as string | undefined)?.trim();
+        if (!name) {
+          result = { ok: false, error: "name required" };
+          break;
+        }
+        const insert: Record<string, unknown> = {
+          ...fields,
+          created_by: user.id,
+          owner_id: fields.owner_id ?? user.id,
+          last_contact_at: new Date().toISOString(),
+        };
+        const { data, error } = await supabase
+          .from("clients")
+          .insert(insert)
+          .select(CLIENT_FULL_COLUMNS)
+          .single();
+        if (error) {
+          result = { ok: false, error: error.message };
+          break;
+        }
+        // Сразу заметка о создании, чтобы сохранилась история
+        await supabase.from("client_notes").insert({
+          client_id: (data as any).id,
+          user_id: user.id,
+          content: "Карточка создана через AI-ассистента",
+          source: "chat",
+        });
+        result = { ok: true, client: data };
         break;
       }
     }
@@ -411,19 +533,4 @@ export async function POST(req: NextRequest) {
     .eq("id", log!.id);
 
   return Response.json(result);
-}
-
-function render(body: string, client: any, variables: Record<string, unknown>) {
-  let out = body;
-  if (client) {
-    out = out
-      .replace(/\{\{client\.name\}\}/g, String(client.name ?? ""))
-      .replace(/\{\{client\.contact\}\}/g, String(client.contact ?? ""))
-      .replace(/\{\{client\.email\}\}/g, String(client.email ?? ""))
-      .replace(/\{\{client\.phone\}\}/g, String(client.phone ?? ""));
-  }
-  for (const [k, v] of Object.entries(variables)) {
-    out = out.replace(new RegExp(`\\{\\{${k}\\}\\}`, "g"), String(v));
-  }
-  return out.replace(/\{\{date\}\}/g, new Date().toLocaleDateString("ru-RU"));
 }
