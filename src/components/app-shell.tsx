@@ -93,16 +93,17 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
                 className={cn(
-                  "flex items-center gap-2.5 rounded-xl px-3 h-10 text-sm transition",
+                  "flex items-center gap-2.5 rounded-xl px-3 h-10 text-sm transition-all duration-200 ease-out will-change-transform",
                   active
                     ? "text-foreground font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted hover:translate-x-0.5"
                 )}
                 style={active ? { background: `color-mix(in srgb, ${brand.accentColor} 12%, transparent)` } : undefined}
               >
                 <item.icon
-                  className="w-4 h-4"
+                  className="w-4 h-4 transition-colors"
                   style={active ? { color: brand.accentColor } : undefined}
                 />{" "}
                 {item.label}
@@ -151,7 +152,11 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       {/* main */}
       <main className="flex-1 flex flex-col min-w-0 min-h-0 h-full pb-[calc(env(safe-area-inset-bottom)+64px)] md:pb-0">
         <ApiErrorBanner />
-        {children}
+        {/* key={pathname} — каждая новая страница перемонтирует обёртку,
+           что переигрывает fade-in и даёт плавный переход между разделами. */}
+        <div key={pathname} className="flex-1 flex flex-col min-h-0 animate-fade-in">
+          {children}
+        </div>
       </main>
 
       {/* Mobile tab bar */}
@@ -166,10 +171,18 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground"
+                prefetch
+                className="relative flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground transition-colors active:scale-95 duration-150"
                 style={active ? { color: brand.accentColor } : undefined}
               >
-                <item.icon className="w-5 h-5" />
+                {active && (
+                  <span
+                    className="absolute top-0 left-1/2 -translate-x-1/2 h-0.5 w-8 rounded-full animate-fade-in"
+                    style={{ background: brand.accentColor }}
+                    aria-hidden
+                  />
+                )}
+                <item.icon className="w-5 h-5 transition-transform duration-200" style={active ? { transform: "translateY(-1px)" } : undefined} />
                 <span>{item.label}</span>
               </Link>
             );

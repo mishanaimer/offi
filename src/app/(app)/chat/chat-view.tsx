@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   Paperclip,
@@ -130,8 +130,10 @@ export function ChatView({
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Авто-скролл — только если пользователь уже внизу
-  useLayoutEffect(() => {
+  // Авто-скролл — только если пользователь уже внизу.
+  // useEffect (не useLayoutEffect) + чтение/запись scrollTop — лёгкая операция,
+  // вместе с rAF-батчингом стрима даёт плавный скролл без джиттера.
+  useEffect(() => {
     if (!stuckToBottomRef.current) return;
     const el = scrollerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -282,7 +284,7 @@ export function ChatView({
     setAttachments((a) => a.filter((x) => x.id !== id));
   }
 
-  async function runToolCall(msgId: string, call: ToolCall) {
+  const runToolCall = useCallback(async (msgId: string, call: ToolCall) => {
     setMessages((m) =>
       m.map((msg) =>
         msg.id === msgId
@@ -340,7 +342,7 @@ export function ChatView({
         )
       );
     }
-  }
+  }, []);
 
   async function send(text: string) {
     // разрешаем отправку если есть хотя бы готовое вложение, даже с пустым текстом
@@ -417,6 +419,31 @@ export function ChatView({
       let acc = "";
       let sources: Msg["sources"] | undefined;
 
+      // Батчим обновления контента через requestAnimationFrame, чтобы не делать
+      // 50+ ре-рендеров в секунду при быстром потоке токенов. Вместо этого —
+      // максимум 1 setMessages за кадр (60fps).
+      let pendingFrame: number | null = null;
+      let dirty = false;
+      const flush = () => {
+        pendingFrame = null;
+        if (!dirty) return;
+        dirty = false;
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === pendingAi.id ? { ...msg, content: acc, sources } : msg
+          )
+        );
+      };
+      const scheduleFlush = () => {
+        dirty = true;
+        if (pendingFrame !== null) return;
+        if (typeof requestAnimationFrame === "function") {
+          pendingFrame = requestAnimationFrame(flush);
+        } else {
+          pendingFrame = window.setTimeout(flush, 16) as unknown as number;
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -424,21 +451,36 @@ export function ChatView({
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
         for (const line of lines) {
+          // SSE-комментарии (`: ping`) — игнорируем
+          if (line.startsWith(":")) continue;
           if (!line.startsWith("data:")) continue;
           const payload = line.slice(5).trim();
           if (!payload) continue;
           if (payload === "[DONE]") continue;
+          let evt: any;
+          try { evt = JSON.parse(payload); } catch { continue; }
+          // Серверная ошибка приходит как event и должна оборвать стрим, а не глохнуть в catch.
+          if (evt.type === "error") {
+            throw new Error(
+              [evt.detail, evt.hint].filter(Boolean).join(" — ") ||
+                evt.error || "stream error"
+            );
+          }
           try {
-            const evt = JSON.parse(payload);
             if (evt.type === "session" && evt.channelId) {
               setActiveChannelId(evt.channelId);
             } else if (evt.type === "sources") sources = evt.sources;
             else if (evt.type === "delta") {
               acc += evt.text;
-              setMessages((m) =>
-                m.map((msg) => (msg.id === pendingAi.id ? { ...msg, content: acc, sources } : msg))
-              );
+              scheduleFlush();
             } else if (evt.type === "tool_calls" && Array.isArray(evt.calls)) {
+              // Перед показом тулзов — гарантированно выгружаем накопленный текст
+              if (pendingFrame !== null) {
+                if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(pendingFrame);
+                else clearTimeout(pendingFrame);
+                pendingFrame = null;
+              }
+              flush();
               const calls: ToolCall[] = evt.calls.map((c: any) => ({
                 id: c.id,
                 name: c.name,
@@ -461,8 +503,16 @@ export function ChatView({
           } catch {}
         }
       }
+      // Финальный flush — гарантированно выгружаем последние накопленные дельты,
+      // прежде чем переключиться в нестриминговый режим (с markdown-рендером).
+      if (pendingFrame !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(pendingFrame);
+        else clearTimeout(pendingFrame);
+        pendingFrame = null;
+      }
+      flush();
       setMessages((m) =>
-        m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false } : msg))
+        m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false, content: acc } : msg))
       );
     } catch (e) {
       const detail = (e as Error).message || "unknown";
@@ -594,7 +644,7 @@ export function ChatView({
           ) : (
             <div className="space-y-5">
               {messages.map((m) => (
-                <MessageBubble key={m.id} msg={m} onRunTool={(c) => runToolCall(m.id, c)} />
+                <MessageBubble key={m.id} msg={m} onRunTool={runToolCall} />
               ))}
             </div>
           )}
@@ -840,7 +890,8 @@ function ChatHistoryDrawer({
   );
 }
 
-function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall) => void }) {
+const MessageBubble = memo(
+  function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (msgId: string, c: ToolCall) => void }) {
   const brand = useBranding();
   const isAi = msg.role === "assistant";
 
@@ -861,9 +912,23 @@ function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall)
               style={{ borderRadius: "18px 18px 18px 4px" }}
             >
               {msg.content ? (
-                <div className="prose prose-sm max-w-none [&>p]:my-1 [&>ul]:my-2">
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
-                </div>
+                msg.streaming ? (
+                  // Во время стрима НЕ парсим markdown — это съедает CPU и
+                  // даёт визуальные артефакты на незакрытых **/```.
+                  // Финальный рендер с markdown произойдёт после `streaming:false`.
+                  <div className="whitespace-pre-wrap break-words">
+                    {msg.content}
+                    <span
+                      className="inline-block w-[7px] h-[15px] align-[-2px] ml-0.5 rounded-[1px] animate-pulse-dot"
+                      style={{ background: brand.assistantColor }}
+                      aria-hidden
+                    />
+                  </div>
+                ) : (
+                  <div className="prose prose-sm max-w-none [&>p]:my-1 [&>ul]:my-2">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
+                )
               ) : (
                 <TypingDots color={brand.assistantColor} />
               )}
@@ -875,7 +940,7 @@ function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall)
                 <ToolCallCard
                   key={c.id}
                   call={c}
-                  onRun={onRunTool ? () => onRunTool(c) : undefined}
+                  onRun={onRunTool ? () => onRunTool(msg.id, c) : undefined}
                 />
               ))}
             </div>
@@ -938,7 +1003,18 @@ function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall)
       </div>
     </div>
   );
-}
+  },
+  // Кастомный equality: ре-рендерим только если ИЗМЕНИЛОСЬ что-то релевантное
+  // в этом конкретном сообщении. Это спасает старые сообщения от перерисовки
+  // на каждой дельте стрима нового.
+  (a, b) =>
+    a.msg.id === b.msg.id &&
+    a.msg.content === b.msg.content &&
+    a.msg.streaming === b.msg.streaming &&
+    a.msg.toolCalls === b.msg.toolCalls &&
+    a.msg.sources === b.msg.sources &&
+    a.onRunTool === b.onRunTool
+);
 
 const TOOL_LABELS: Record<string, string> = {
   send_email: "Отправить email",

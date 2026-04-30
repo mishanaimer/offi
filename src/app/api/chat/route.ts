@@ -129,209 +129,247 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // --- Router: определяем тип запроса ---
-  let type: "question" | "action" | "smalltalk" = "question";
-  try {
-    const cls = await classify(message);
-    type = cls.type;
-  } catch {}
+  // --- сохраняем сообщение пользователя СИНХРОННО (нужен id для memory),
+  //     но запросы в фоне не дожидаемся (это всего 1 INSERT) ---
+  const userInsertPromise = channelId
+    ? service
+        .from("messages")
+        .insert({
+          channel_id: channelId,
+          user_id: user.id,
+          content: message,
+          is_ai: false,
+        })
+        .select("id")
+        .single()
+    : Promise.resolve({ data: null } as any);
 
-  // --- Dual RAG: chunks + memories ---
-  let context = "";
-  let sources: Array<{ document_id: string; snippet: string; name?: string }> = [];
-  let memorySources: Array<{ id: string; content: string }> = [];
-
-  if (type !== "smalltalk") {
-    try {
-      const vec = await embed(message);
-
-      const [{ data: matches }, { data: memMatches }] = await Promise.all([
-        service.rpc("match_chunks", {
-          query_embedding: vec,
-          p_company_id: company.id,
-          match_count: 3,
-        }),
-        service.rpc("match_memories", {
-          query_embedding: vec,
-          p_company_id: company.id,
-          match_count: 3,
-        }),
-      ]);
-
-      if (Array.isArray(matches) && matches.length) {
-        sources = matches.map((m: any) => ({
-          document_id: m.document_id,
-          snippet: truncate(m.content, 220),
-        }));
-      }
-      if (Array.isArray(memMatches) && memMatches.length) {
-        memorySources = memMatches.map((m: any) => ({
-          id: m.id,
-          content: truncate(m.content, 220),
-        }));
-      }
-
-      const chunkCtx = (matches ?? [])
-        .map((m: any, i: number) => `[Документ ${i + 1}] ${m.content}`)
-        .join("\n\n");
-      const memCtx = (memMatches ?? [])
-        .map((m: any, i: number) => `[Память ${i + 1}] ${m.content}`)
-        .join("\n\n");
-
-      context = [chunkCtx, memCtx].filter(Boolean).join("\n\n");
-    } catch (e) {
-      console.error("RAG error", e);
-    }
-  }
-
-  // Передаём tools всем типам, кроме чистого smalltalk — классификатор часто
-  // недооценивает «найди клиента» / «пришли письмо» и относит их к question.
-  const withTools = type !== "smalltalk";
-  const systemPrompt = SYSTEM_PROMPT(company.assistant_name, company.name, withTools);
-
-  // Короткая сводка по CRM/шаблонам — даём модели опору, чтобы она знала, что у компании есть
-  // (а не вызывала тулы «вслепую»). Только идентификаторы и названия, не реквизиты.
-  let crmSummary = "";
-  if (withTools) {
-    try {
-      const [
-        { data: clientsBrief },
-        { data: tplsBrief },
-        { data: contractsBrief },
-        { data: textTplsBrief },
-      ] = await Promise.all([
-        service
-          .from("clients")
-          .select("id, short_name, name, status, inn, last_contact_at")
-          .eq("company_id", company.id)
-          .order("last_contact_at", { ascending: false, nullsFirst: false })
-          .order("created_at", { ascending: false })
-          .limit(10),
-        service
-          .from("contract_templates")
-          .select("id, name, description")
-          .eq("company_id", company.id)
-          .order("created_at", { ascending: false })
-          .limit(10),
-        service
-          .from("generated_contracts")
-          .select("id, name, client_id, created_at")
-          .eq("company_id", company.id)
-          .order("created_at", { ascending: false })
-          .limit(5),
-        service
-          .from("templates")
-          .select("id, name")
-          .eq("company_id", company.id)
-          .order("created_at", { ascending: false })
-          .limit(10),
-      ]);
-      const cBlock = (clientsBrief ?? [])
-        .map(
-          (c: any) =>
-            `- ${c.short_name || c.name}${c.inn ? ` (ИНН ${c.inn})` : ""} · status: ${c.status ?? "—"} · id: ${c.id}`
-        )
-        .join("\n");
-      const tBlock = (tplsBrief ?? [])
-        .map((t: any) => `- «${t.name}»${t.description ? ` — ${truncate(t.description, 80)}` : ""} · id: ${t.id}`)
-        .join("\n");
-      const gBlock = (contractsBrief ?? [])
-        .map((g: any) => `- ${g.name ?? g.id} · client_id: ${g.client_id ?? "—"} · ${g.created_at?.slice(0, 10)}`)
-        .join("\n");
-      const sections: string[] = [];
-      if (cBlock) sections.push(`Последние клиенты (id для тулов):\n${cBlock}`);
-      else sections.push("В CRM пока нет клиентов — предложи добавить.");
-      if (tBlock) sections.push(`Шаблоны договоров (id для ai_create_contract):\n${tBlock}`);
-      else sections.push("Шаблонов договоров пока нет — предложи загрузить .docx в Документы → Договоры.");
-      if (gBlock) sections.push(`Последние договоры:\n${gBlock}`);
-      const textTplBlock = (textTplsBrief ?? [])
-        .map((t: any) => `- «${t.name}» · id: ${t.id}`)
-        .join("\n");
-      if (textTplBlock) sections.push(`Текстовые шаблоны (id для update/delete_text_template):\n${textTplBlock}`);
-      crmSummary = "\n\nСнимок CRM (актуальный):\n" + sections.join("\n\n");
-    } catch (e) {
-      console.error("crm summary error", (e as Error).message);
-    }
-  }
-
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content:
-        systemPrompt +
-        (context ? `\n\nКонтекст компании:\n${context}` : "") +
-        crmSummary,
-    },
-    ...history.slice(-8).map((h) => ({ role: h.role, content: h.content }) as ChatMessage),
-    { role: "user", content: message },
-  ];
-
-  // --- сохраняем сообщение пользователя + инкремент счётчика ---
-  let savedUserMsgId: string | null = null;
-  if (channelId) {
-    const { data: inserted } = await service
-      .from("messages")
-      .insert({
-        channel_id: channelId,
-        user_id: user.id,
-        content: message,
-        is_ai: false,
-      })
-      .select("id")
-      .single();
-    savedUserMsgId = inserted?.id ?? null;
-  }
-
-  await service.rpc("increment_usage", {
+  // Инкремент счётчика — в фоне, не блокирует стрим.
+  void service.rpc("increment_usage", {
     p_company_id: company.id,
     p_period: period,
     p_requests: 1,
     p_actions: 0,
   });
 
-  // --- фоновая экстракция фактов (не блокирует стрим) ---
-  scheduleFactExtraction(message, {
-    companyId: company.id,
-    userId: user.id,
-    sourceId: savedUserMsgId,
-  });
-
-  // --- streaming ответа ---
-  let upstream: ReadableStream<Uint8Array>;
-  try {
-    upstream = await chatCompletionStream(messages, {
-      model: MODELS.main,
-      ...(withTools ? { tools: ACTION_TOOLS, tool_choice: "auto" } : {}),
-    });
-  } catch (e) {
-    const msg = (e as Error).message ?? "unknown";
-    console.error("RouterAI stream error:", msg);
-    return Response.json(
-      {
-        error: "routerai_failed",
-        detail: msg,
-        hint: "Проверь ROUTERAI_API_KEY, ROUTERAI_BASE_URL и ROUTERAI_MAIN_MODEL. Перезапусти dev-сервер после правки .env.local.",
-      },
-      { status: 502 }
-    );
-  }
-
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
+
+      // ⚡️ Сразу после открытия стрима шлём keepalive-комментарий —
+      // это «прорывает» прокси-буферизацию (Vercel/Nginx) и подтверждает
+      // клиенту что коннект жив, пока идёт RAG/CRM-подготовка.
+      try {
+        controller.enqueue(encoder.encode(`: connected\n\n`));
+      } catch {}
+
+      // Heartbeat каждые 10 сек — на случай долгих tool-вызовов или RAG
+      // не даёт прокси/браузеру разорвать idle-коннект.
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: ping\n\n`));
+        } catch {
+          clearInterval(heartbeat);
+        }
+      }, 10_000);
+
       if (createdNewChannel && channelId) {
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "session", channelId })}\n\n`
-          )
-        );
+        try {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "session", channelId })}\n\n`
+            )
+          );
+        } catch {}
       }
+
+      // --- Параллельно: classify + embedding + CRM-сводка ---
+      const classifyPromise = classify(message).catch(() => ({ type: "question" as const, confidence: 0.5 }));
+      const embedPromise = embed(message).catch((e) => {
+        console.error("embed error", e);
+        return null;
+      });
+
+      // CRM-сводку начинаем сразу — она не зависит от RAG.
+      const crmPromise = (async () => {
+        try {
+          const [
+            { data: clientsBrief },
+            { data: tplsBrief },
+            { data: contractsBrief },
+            { data: textTplsBrief },
+          ] = await Promise.all([
+            service
+              .from("clients")
+              .select("id, short_name, name, status, inn, last_contact_at")
+              .eq("company_id", company.id)
+              .order("last_contact_at", { ascending: false, nullsFirst: false })
+              .order("created_at", { ascending: false })
+              .limit(10),
+            service
+              .from("contract_templates")
+              .select("id, name, description")
+              .eq("company_id", company.id)
+              .order("created_at", { ascending: false })
+              .limit(10),
+            service
+              .from("generated_contracts")
+              .select("id, name, client_id, created_at")
+              .eq("company_id", company.id)
+              .order("created_at", { ascending: false })
+              .limit(5),
+            service
+              .from("templates")
+              .select("id, name")
+              .eq("company_id", company.id)
+              .order("created_at", { ascending: false })
+              .limit(10),
+          ]);
+          const cBlock = (clientsBrief ?? [])
+            .map(
+              (c: any) =>
+                `- ${c.short_name || c.name}${c.inn ? ` (ИНН ${c.inn})` : ""} · status: ${c.status ?? "—"} · id: ${c.id}`
+            )
+            .join("\n");
+          const tBlock = (tplsBrief ?? [])
+            .map((t: any) => `- «${t.name}»${t.description ? ` — ${truncate(t.description, 80)}` : ""} · id: ${t.id}`)
+            .join("\n");
+          const gBlock = (contractsBrief ?? [])
+            .map((g: any) => `- ${g.name ?? g.id} · client_id: ${g.client_id ?? "—"} · ${g.created_at?.slice(0, 10)}`)
+            .join("\n");
+          const sections: string[] = [];
+          if (cBlock) sections.push(`Последние клиенты (id для тулов):\n${cBlock}`);
+          else sections.push("В CRM пока нет клиентов — предложи добавить.");
+          if (tBlock) sections.push(`Шаблоны договоров (id для ai_create_contract):\n${tBlock}`);
+          else sections.push("Шаблонов договоров пока нет — предложи загрузить .docx в Документы → Договоры.");
+          if (gBlock) sections.push(`Последние договоры:\n${gBlock}`);
+          const textTplBlock = (textTplsBrief ?? [])
+            .map((t: any) => `- «${t.name}» · id: ${t.id}`)
+            .join("\n");
+          if (textTplBlock) sections.push(`Текстовые шаблоны (id для update/delete_text_template):\n${textTplBlock}`);
+          return "\n\nСнимок CRM (актуальный):\n" + sections.join("\n\n");
+        } catch (e) {
+          console.error("crm summary error", (e as Error).message);
+          return "";
+        }
+      })();
+
+      // Получаем тип запроса (нужен для решения «звать ли RAG»)
+      const cls = await classifyPromise;
+      const type: "question" | "action" | "smalltalk" = cls.type;
+      const withTools = type !== "smalltalk";
+
+      // Embedding и матчи зависят от type (не дёргаем для smalltalk)
+      let context = "";
+      let sources: Array<{ document_id: string; snippet: string; name?: string }> = [];
+      let memorySources: Array<{ id: string; content: string }> = [];
+
+      if (type !== "smalltalk") {
+        try {
+          const vec = await embedPromise;
+          if (vec) {
+            const [{ data: matches }, { data: memMatches }] = await Promise.all([
+              service.rpc("match_chunks", {
+                query_embedding: vec,
+                p_company_id: company.id,
+                match_count: 3,
+              }),
+              service.rpc("match_memories", {
+                query_embedding: vec,
+                p_company_id: company.id,
+                match_count: 3,
+              }),
+            ]);
+
+            if (Array.isArray(matches) && matches.length) {
+              sources = matches.map((m: any) => ({
+                document_id: m.document_id,
+                snippet: truncate(m.content, 220),
+              }));
+            }
+            if (Array.isArray(memMatches) && memMatches.length) {
+              memorySources = memMatches.map((m: any) => ({
+                id: m.id,
+                content: truncate(m.content, 220),
+              }));
+            }
+
+            const chunkCtx = (matches ?? [])
+              .map((m: any, i: number) => `[Документ ${i + 1}] ${m.content}`)
+              .join("\n\n");
+            const memCtx = (memMatches ?? [])
+              .map((m: any, i: number) => `[Память ${i + 1}] ${m.content}`)
+              .join("\n\n");
+
+            context = [chunkCtx, memCtx].filter(Boolean).join("\n\n");
+          }
+        } catch (e) {
+          console.error("RAG error", e);
+        }
+      }
+
+      const systemPrompt = SYSTEM_PROMPT(company.assistant_name, company.name, withTools);
+      const crmSummary = withTools ? await crmPromise : "";
+
+      const messages: ChatMessage[] = [
+        {
+          role: "system",
+          content:
+            systemPrompt +
+            (context ? `\n\nКонтекст компании:\n${context}` : "") +
+            crmSummary,
+        },
+        ...history.slice(-8).map((h) => ({ role: h.role, content: h.content }) as ChatMessage),
+        { role: "user", content: message },
+      ];
+
+      // Дожидаемся записи user-сообщения (нужен id для memory)
+      const userIns = await userInsertPromise;
+      const savedUserMsgId: string | null = (userIns as any)?.data?.id ?? null;
+
+      // Фоновая экстракция фактов (не блокирует стрим)
+      scheduleFactExtraction(message, {
+        companyId: company.id,
+        userId: user.id,
+        sourceId: savedUserMsgId,
+      });
+
       if (sources.length || memorySources.length) {
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "sources", sources, memories: memorySources })}\n\n`
-          )
-        );
+        try {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "sources", sources, memories: memorySources })}\n\n`
+            )
+          );
+        } catch {}
+      }
+
+      // --- streaming ответа от LLM ---
+      let upstream: ReadableStream<Uint8Array>;
+      try {
+        upstream = await chatCompletionStream(messages, {
+          model: MODELS.main,
+          ...(withTools ? { tools: ACTION_TOOLS, tool_choice: "auto" } : {}),
+        });
+      } catch (e) {
+        const errMsg = (e as Error).message ?? "unknown";
+        console.error("RouterAI stream error:", errMsg);
+        try {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "error",
+                error: "routerai_failed",
+                detail: errMsg,
+                hint: "Проверь ROUTERAI_API_KEY, ROUTERAI_BASE_URL и ROUTERAI_MAIN_MODEL.",
+              })}\n\n`
+            )
+          );
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          controller.close();
+        } catch {}
+        clearInterval(heartbeat);
+        return;
       }
 
       const reader = upstream.getReader();
@@ -452,6 +490,8 @@ export async function POST(req: NextRequest) {
           } catch {}
         }
 
+        clearInterval(heartbeat);
+
         try {
           controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
           controller.close();
@@ -495,6 +535,10 @@ export async function POST(req: NextRequest) {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      // Отключает буферизацию у Nginx/Vercel/любых reverse-proxy на пути.
+      // Без этого SSE может накапливаться пакетами по килобайту и
+      // токены будут идти «рывками».
+      "X-Accel-Buffering": "no",
     },
   });
 }
