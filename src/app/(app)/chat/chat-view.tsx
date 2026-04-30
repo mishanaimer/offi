@@ -416,32 +416,70 @@ export function ChatView({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let acc = "";
+      let acc = "";              // полный текст, накопленный с сервера
+      let displayedLength = 0;   // сколько символов уже на экране
       let sources: Msg["sources"] | undefined;
 
-      // Батчим обновления контента через requestAnimationFrame, чтобы не делать
-      // 50+ ре-рендеров в секунду при быстром потоке токенов. Вместо этого —
-      // максимум 1 setMessages за кадр (60fps).
-      let pendingFrame: number | null = null;
-      let dirty = false;
-      const flush = () => {
-        pendingFrame = null;
-        if (!dirty) return;
-        dirty = false;
+      // Typewriter-буфер: сервер может присылать чанки рваными группами
+      // (RouterAI отдаёт по 5–30 токенов разом), а мы рендерим плавно
+      // по 1–4 символа за кадр (~60fps). Если буфер растёт — ускоряемся,
+      // чтобы не отставать. Это даёт «премиальный» эффект побуквенной
+      // печати, как в Claude.ai/Ollama, независимо от рваности upstream.
+      let typewriterRaf: number | null = null;
+      let streamDone = false;
+
+      const tick = () => {
+        typewriterRaf = null;
+        const remaining = acc.length - displayedLength;
+        if (remaining <= 0) return;
+
+        // Адаптивная скорость: чем больше отстали, тем быстрее печатаем.
+        // Базовая — 2 символа/кадр (≈120 cps), потолок — 12 (быстрый сброс).
+        let step = 2;
+        if (remaining > 240) step = 12;
+        else if (remaining > 120) step = 8;
+        else if (remaining > 60) step = 5;
+        else if (remaining > 25) step = 3;
+
+        // Если стрим уже завершён — ускоряемся, чтобы не висеть в хвосте.
+        if (streamDone) step = Math.max(step, Math.ceil(remaining / 6));
+
+        displayedLength = Math.min(displayedLength + step, acc.length);
+
         setMessages((m) =>
           m.map((msg) =>
-            msg.id === pendingAi.id ? { ...msg, content: acc, sources } : msg
+            msg.id === pendingAi.id
+              ? { ...msg, content: acc.slice(0, displayedLength), sources }
+              : msg
           )
         );
-      };
-      const scheduleFlush = () => {
-        dirty = true;
-        if (pendingFrame !== null) return;
-        if (typeof requestAnimationFrame === "function") {
-          pendingFrame = requestAnimationFrame(flush);
-        } else {
-          pendingFrame = window.setTimeout(flush, 16) as unknown as number;
+
+        if (displayedLength < acc.length) {
+          typewriterRaf = requestAnimationFrame(tick);
         }
+      };
+      const scheduleTick = () => {
+        if (typewriterRaf !== null) return;
+        if (typeof requestAnimationFrame === "function") {
+          typewriterRaf = requestAnimationFrame(tick);
+        } else {
+          typewriterRaf = window.setTimeout(tick, 16) as unknown as number;
+        }
+      };
+      const flushAllNow = () => {
+        if (typewriterRaf !== null) {
+          if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(typewriterRaf);
+          else clearTimeout(typewriterRaf);
+          typewriterRaf = null;
+        }
+        displayedLength = acc.length;
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === pendingAi.id
+              ? { ...msg, content: acc, sources }
+              : msg
+          )
+        );
       };
 
       while (true) {
@@ -472,15 +510,10 @@ export function ChatView({
             } else if (evt.type === "sources") sources = evt.sources;
             else if (evt.type === "delta") {
               acc += evt.text;
-              scheduleFlush();
+              scheduleTick();
             } else if (evt.type === "tool_calls" && Array.isArray(evt.calls)) {
-              // Перед показом тулзов — гарантированно выгружаем накопленный текст
-              if (pendingFrame !== null) {
-                if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(pendingFrame);
-                else clearTimeout(pendingFrame);
-                pendingFrame = null;
-              }
-              flush();
+              // Перед показом тулзов — гарантированно показываем весь накопленный текст
+              flushAllNow();
               const calls: ToolCall[] = evt.calls.map((c: any) => ({
                 id: c.id,
                 name: c.name,
@@ -503,14 +536,19 @@ export function ChatView({
           } catch {}
         }
       }
-      // Финальный flush — гарантированно выгружаем последние накопленные дельты,
-      // прежде чем переключиться в нестриминговый режим (с markdown-рендером).
-      if (pendingFrame !== null) {
-        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(pendingFrame);
-        else clearTimeout(pendingFrame);
-        pendingFrame = null;
-      }
-      flush();
+      // Стрим закончился — typewriter ускоряется и догоняет хвост.
+      streamDone = true;
+      // Ждём, пока typewriter дорисует все символы (плавно, без резкого скачка).
+      await new Promise<void>((resolve) => {
+        const waitForTypewriter = () => {
+          if (displayedLength >= acc.length) {
+            resolve();
+          } else {
+            requestAnimationFrame(waitForTypewriter);
+          }
+        };
+        waitForTypewriter();
+      });
       setMessages((m) =>
         m.map((msg) => (msg.id === pendingAi.id ? { ...msg, streaming: false, content: acc } : msg))
       );

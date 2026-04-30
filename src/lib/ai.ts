@@ -72,6 +72,11 @@ export async function chatCompletionStream(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${API_KEY}`,
+      // Принципиально отключаем сжатие: с gzip Node-овский fetch ждёт
+      // полный gzip-блок перед декодированием → SSE-чанки идут пачками.
+      // С identity каждый сетевой пакет = живой токен.
+      "Accept-Encoding": "identity",
+      Accept: "text/event-stream",
     },
     body: JSON.stringify({
       model: options.model ?? MODELS.main,
@@ -82,6 +87,7 @@ export async function chatCompletionStream(
       tools: options.tools,
       tool_choice: options.tool_choice,
     }),
+    cache: "no-store",
   });
   if (!res.ok || !res.body) throw new Error(`RouterAI stream: ${res.status} ${await res.text()}`);
   return res.body;
