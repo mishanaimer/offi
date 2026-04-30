@@ -1,9 +1,41 @@
+import Link from "next/link";
 import { Logo } from "@/components/logo";
 
-const COLUMNS = [
-  { title: "Продукт", links: ["Возможности", "Тарифы", "Интеграции", "API"] },
-  { title: "Компания", links: ["О нас", "Блог", "Вакансии", "Контакты"] },
-  { title: "Поддержка", links: ["Документация", "Обучение", "Статус", "Безопасность"] },
+type FooterLink = { label: string; href: string; external?: boolean };
+
+const COLUMNS: { title: string; links: FooterLink[] }[] = [
+  {
+    title: "Продукт",
+    links: [
+      { label: "Возможности", href: "/#features" },
+      { label: "Тарифы", href: "/#pricing" },
+      { label: "Интеграции", href: "/docs#integrations" },
+      { label: "Документация", href: "/docs" },
+    ],
+  },
+  {
+    title: "Компания",
+    links: [
+      { label: "Связаться", href: "mailto:hello@offi-ai.com", external: true },
+      { label: "Безопасность", href: "/docs#security" },
+      { label: "Запросить пилот", href: "mailto:hello@offi-ai.com?subject=Пилот%20Offi", external: true },
+    ],
+  },
+  {
+    title: "Поддержка",
+    links: [
+      { label: "Поддержка", href: "mailto:support@offi-ai.com", external: true },
+      { label: "Запрос по ПДн", href: "mailto:privacy@offi-ai.com", external: true },
+      { label: "Документы", href: "/legal" },
+    ],
+  },
+];
+
+const LEGAL_LINKS: FooterLink[] = [
+  { label: "Оферта", href: "/legal/offer" },
+  { label: "Политика ПДн", href: "/legal/privacy" },
+  { label: "Cookies", href: "/legal/cookies" },
+  { label: "DPA", href: "/legal/dpa" },
 ];
 
 export function LandingFooter() {
@@ -17,10 +49,16 @@ export function LandingFooter() {
               AI-ассистент для бизнеса. Документы, клиенты, задачи — в одном чате.
             </p>
             <div className="flex gap-2">
-              {["TG", "VK", "YT"].map((s) => (
+              {[
+                { s: "TG", href: "https://t.me/" },
+                { s: "VK", href: "https://vk.com/" },
+                { s: "YT", href: "https://youtube.com/" },
+              ].map(({ s, href }) => (
                 <a
                   key={s}
-                  href="#"
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="btn-bounce w-8 h-8 rounded-lg bg-[hsl(var(--surface-alt))] text-[hsl(var(--text-tertiary))] border border-[hsl(var(--border-light))] grid place-items-center text-[10px] font-bold hover:bg-[hsl(var(--accent-brand-light))] hover:text-primary hover:border-[hsl(var(--accent-brand-mid))]"
                 >
                   {s}
@@ -31,21 +69,41 @@ export function LandingFooter() {
           {COLUMNS.map((col) => (
             <div key={col.title}>
               <div className="text-xs font-semibold text-foreground mb-3.5">{col.title}</div>
-              {col.links.map((l) => (
-                <a
-                  key={l}
-                  href="#"
-                  className="link-hover block text-[13px] text-muted-foreground mb-2.5"
-                >{l}</a>
-              ))}
+              {col.links.map((l) =>
+                l.external ? (
+                  <a
+                    key={l.label}
+                    href={l.href}
+                    className="link-hover block text-[13px] text-muted-foreground mb-2.5"
+                  >
+                    {l.label}
+                  </a>
+                ) : (
+                  <Link
+                    key={l.label}
+                    href={l.href}
+                    className="link-hover block text-[13px] text-muted-foreground mb-2.5"
+                  >
+                    {l.label}
+                  </Link>
+                )
+              )}
             </div>
           ))}
         </div>
         <div className="border-t border-[hsl(var(--border-light))] pt-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <span className="text-xs text-[hsl(var(--text-tertiary))]">© 2026 offi.ai · Москва, Россия</span>
-          <div className="flex gap-4">
-            {["Конфиденциальность", "Условия", "Cookies"].map((l) => (
-              <a key={l} href="#" className="link-hover text-xs text-[hsl(var(--text-tertiary))]">{l}</a>
+          <span className="text-xs text-[hsl(var(--text-tertiary))]">
+            © {new Date().getFullYear()} offi-ai.com · Москва, Россия
+          </span>
+          <div className="flex flex-wrap gap-4">
+            {LEGAL_LINKS.map((l) => (
+              <Link
+                key={l.label}
+                href={l.href}
+                className="link-hover text-xs text-[hsl(var(--text-tertiary))]"
+              >
+                {l.label}
+              </Link>
             ))}
           </div>
         </div>

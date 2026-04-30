@@ -30,6 +30,7 @@ import Link from "next/link";
 import { useApiHealth } from "@/components/api-health";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { AUTO_RUN_TOOLS } from "@/lib/tools";
+import { MessageReactions } from "@/components/message-reactions";
 
 type Attachment = {
   id: string;
@@ -901,11 +902,16 @@ function MessageBubble({ msg, onRunTool }: { msg: Msg; onRunTool?: (c: ToolCall)
               )}
             </div>
           )}
-          {msg.created_at && (
-            <div className="pl-1 text-[10px] text-muted-foreground/70">
-              {formatDate(msg.created_at)}
-            </div>
-          )}
+          <div className="flex items-center gap-2 pl-1">
+            {msg.created_at && (
+              <span className="text-[10px] text-muted-foreground/70">
+                {formatDate(msg.created_at)}
+              </span>
+            )}
+            {!msg.streaming && (hasText || hasTools) && (
+              <MessageReactions messageId={msg.id} />
+            )}
+          </div>
         </div>
       </div>
     );

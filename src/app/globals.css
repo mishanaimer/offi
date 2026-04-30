@@ -314,3 +314,129 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+
+/* =========================================================
+   Legal & Docs pages — типография + PDF print
+   ========================================================= */
+
+.print-only { display: none; }
+
+.legal-prose {
+  font-size: 15px;
+  line-height: 1.7;
+  color: hsl(var(--foreground));
+}
+.legal-prose h1,
+.legal-prose h2,
+.legal-prose h3,
+.legal-prose h4 {
+  color: hsl(var(--foreground));
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+.legal-prose h2 {
+  font-size: 22px;
+  margin-top: 2.4em;
+  margin-bottom: 0.8em;
+  padding-top: 0.4em;
+  border-top: 1px solid hsl(var(--border-light));
+}
+.legal-prose h2:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.legal-prose h3 { font-size: 17px; margin-top: 1.8em; margin-bottom: 0.6em; }
+.legal-prose h4 { font-size: 15px; margin-top: 1.4em; margin-bottom: 0.4em; }
+.legal-prose p { margin: 0.95em 0; color: hsl(var(--muted-foreground)); }
+.legal-prose strong { color: hsl(var(--foreground)); font-weight: 600; }
+.legal-prose em { font-style: italic; color: hsl(var(--foreground)); }
+.legal-prose ul,
+.legal-prose ol { margin: 0.8em 0; padding-left: 1.4em; color: hsl(var(--muted-foreground)); }
+.legal-prose li { margin: 0.35em 0; }
+.legal-prose li > p { margin: 0.2em 0; }
+.legal-prose code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.12em 0.36em;
+  border-radius: 6px;
+  background: hsl(var(--surface-alt));
+  color: hsl(var(--foreground));
+}
+.legal-prose blockquote {
+  margin: 1.2em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid hsl(var(--accent-brand-mid));
+  background: hsl(var(--accent-brand-light) / 0.4);
+  color: hsl(var(--foreground));
+  border-radius: 0 8px 8px 0;
+}
+.legal-prose blockquote p { margin: 0.4em 0; color: hsl(var(--foreground)); }
+.legal-prose hr {
+  margin: 2.4em 0;
+  border: 0;
+  border-top: 1px solid hsl(var(--border-light));
+}
+.legal-prose table {
+  width: 100%;
+  margin: 1.2em 0;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  overflow: hidden;
+}
+.legal-prose thead { background: hsl(var(--surface-alt)); }
+.legal-prose th,
+.legal-prose td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid hsl(var(--border-light));
+  vertical-align: top;
+}
+.legal-prose tr:last-child td { border-bottom: none; }
+.legal-prose th { font-weight: 600; color: hsl(var(--foreground)); }
+.legal-prose td { color: hsl(var(--muted-foreground)); }
+
+.docs-prose ol { counter-reset: docs-step; }
+.docs-prose ol > li { padding-left: 0.5em; }
+
+/* Print / PDF — A4, минимальные поля, водяной знак виден */
+@media print {
+  @page { size: A4; margin: 18mm 16mm; }
+
+  html, body { background: #fff !important; }
+  body { color: #111 !important; }
+
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+
+  /* Скрываем sticky-хедеры и навигацию */
+  header.sticky,
+  aside,
+  nav { display: none !important; }
+
+  /* Контейнеры разворачиваем во всю ширину */
+  main { max-width: 100% !important; padding: 0 !important; }
+  .legal-page main,
+  .docs-page main { max-width: 100% !important; padding: 0 !important; }
+
+  /* Увеличиваем читаемость в PDF */
+  .legal-prose { font-size: 11.5pt; line-height: 1.55; color: #111; }
+  .legal-prose h1 { font-size: 18pt; }
+  .legal-prose h2 { font-size: 14pt; margin-top: 1.6em; border-top: none; padding-top: 0; }
+  .legal-prose h3 { font-size: 12pt; }
+  .legal-prose p,
+  .legal-prose li,
+  .legal-prose td { color: #222; }
+
+  /* Не рвём заголовки и таблицы между страницами */
+  h1, h2, h3, h4 { break-after: avoid; }
+  table, blockquote { break-inside: avoid; }
+
+  /* Ссылки печатаем как текст */
+  a { color: #0259DD !important; text-decoration: none; }
+
+  /* details — раскрываем все FAQ при печати */
+  details[open],
+  details { display: block; }
+  details summary { display: block; pointer-events: none; }
+  details > div { display: block !important; }
+}

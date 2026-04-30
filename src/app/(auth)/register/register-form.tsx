@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -12,6 +13,7 @@ export function RegisterForm() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -40,12 +42,16 @@ export function RegisterForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
+    if (!consent) {
+      mascot.fire("surprise");
+      return setErr("Чтобы создать аккаунт, нужно принять Оферту и Политику обработки персональных данных.");
+    }
     mascot.setState("working");
     const supabase = createClient();
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { full_name: fullName } },
+      options: { data: { full_name: fullName, consent_pd_at: new Date().toISOString() } },
     });
     if (error) {
       mascot.setState("idle");
@@ -132,13 +138,33 @@ export function RegisterForm() {
           />
           <p className="text-xs text-muted-foreground">Минимум 6 символов</p>
         </div>
+        {/* Согласие на ПДн (152-ФЗ) */}
+        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            disabled={pending}
+            className="mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer rounded border-border text-primary focus:ring-2 focus:ring-primary/30 focus:ring-offset-0"
+            aria-describedby="consent-text"
+          />
+          <span id="consent-text" className="text-xs leading-[1.5] text-muted-foreground">
+            Я принимаю{" "}
+            <Link href="/legal/offer" target="_blank" className="text-primary hover:underline">
+              Оферту
+            </Link>
+            {" и "}
+            <Link href="/legal/privacy" target="_blank" className="text-primary hover:underline">
+              Политику обработки персональных данных
+            </Link>
+            {" и даю согласие на обработку моих данных в соответствии с 152-ФЗ."}
+          </span>
+        </label>
+
         {err && <p className="text-sm text-destructive">{err}</p>}
-        <Button type="submit" className="w-full" disabled={pending}>
+        <Button type="submit" className="w-full" disabled={pending || !consent}>
           {pending ? "Создаём…" : "Создать аккаунт"}
         </Button>
-        <p className="text-xs text-muted-foreground text-center">
-          Регистрируясь, вы принимаете условия и политику конфиденциальности.
-        </p>
       </form>
     </div>
   );

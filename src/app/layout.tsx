@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Onest } from "next/font/google";
 import "./globals.css";
+import { CookieBanner } from "@/components/cookie-banner";
 
 const onest = Onest({
   subsets: ["latin", "cyrillic"],
@@ -39,7 +40,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru" className={onest.variable}>
-      <body className={onest.className}>{children}</body>
+      <body className={onest.className}>
+        {children}
+        <CookieBanner />
+      </body>
     </html>
   );
 }

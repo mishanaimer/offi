@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Lock, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, Lock, Sparkles, Ticket, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsTabs } from "@/components/settings-tabs";
 import { UsageBar } from "@/components/usage-bar";
 import { useBranding } from "@/components/branding-provider";
-import { PLANS, PAID_PLANS, getPlan, type PlanCode } from "@/lib/plans";
+import { PLANS, PAID_PLANS, getPlan, getEffectivePrice, type PlanCode } from "@/lib/plans";
 import { cn, formatDate } from "@/lib/utils";
 
 type Usage = {
@@ -31,11 +32,19 @@ export function PlansView({
   usage,
   lastRequest,
 }: {
-  company: { id: string; plan: string };
+  company: {
+    id: string;
+    plan: string;
+    is_founder?: boolean | null;
+    locked_price?: Record<string, number> | null;
+    pilot_until?: string | null;
+    promo_code?: string | null;
+  };
   currentUserRole: "owner" | "admin" | "member";
   usage: Usage;
   lastRequest: LastRequest;
 }) {
+  const router = useRouter();
   const brand = useBranding();
   const isAdmin = currentUserRole === "owner" || currentUserRole === "admin";
   const currentPlan = getPlan(company.plan);
@@ -43,6 +52,38 @@ export function PlansView({
   const [busyCode, setBusyCode] = useState<PlanCode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [promo, setPromo] = useState("");
+  const [promoBusy, setPromoBusy] = useState(false);
+  const [promoErr, setPromoErr] = useState<string | null>(null);
+
+  async function activatePromo() {
+    if (!isAdmin || !promo.trim()) return;
+    setPromoBusy(true);
+    setPromoErr(null);
+    setErr(null);
+    try {
+      const res = await fetch("/api/promo/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: promo.trim() }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? "Ошибка активации");
+      if (j.is_founder) {
+        setToast("🎉 Вы участник Founders-программы! Скидка 50% зафиксирована пожизненно при непрерывной подписке.");
+      } else if (j.plan === "pilot" && j.pilot_until) {
+        setToast(`Пилот активирован до ${formatDate(j.pilot_until)}. Полный доступ ко всем модулям.`);
+      } else {
+        setToast(`Промокод активирован: тариф «${getPlan(j.plan).name}».`);
+      }
+      setPromo("");
+      router.refresh();
+    } catch (e) {
+      setPromoErr((e as Error).message);
+    } finally {
+      setPromoBusy(false);
+    }
+  }
 
   async function request(plan: PlanCode) {
     if (!isAdmin) return;
@@ -175,12 +216,35 @@ export function PlansView({
           </div>
         </div>
 
+        {/* Founders badge */}
+        {company.is_founder && (
+          <div
+            className="rounded-2xl border border-amber-300/50 bg-gradient-to-r from-amber-50 to-orange-50 p-4 flex items-start gap-3"
+          >
+            <div className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-700">
+              <Crown className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-[14px] font-semibold text-amber-900">Founders-программа активна</h3>
+              <p className="mt-0.5 text-[12.5px] leading-[1.55] text-amber-800/80">
+                У вас зафиксирована скидка 50% пожизненно при непрерывной подписке. Цены в карточках ниже — уже с вашей скидкой.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Plans grid */}
         <section className="grid md:grid-cols-3 gap-4">
           {PAID_PLANS.map((code) => {
             const p = PLANS[code];
             const isCurrent = company.plan === code;
-            const price = billing === "month" ? p.priceMonth : p.priceYear;
+            const stdMonth = p.priceMonth;
+            const stdYear = p.priceYear;
+            const effMonth = getEffectivePrice(company, code, "month");
+            const effYear = getEffectivePrice(company, code, "year");
+            const price = billing === "month" ? effMonth : effYear;
+            const stdPrice = billing === "month" ? stdMonth : stdYear;
+            const isFounderPrice = company.is_founder && price < stdPrice;
             const priceSuffix = billing === "month" ? "₽/мес" : "₽/год";
             return (
               <div
@@ -222,7 +286,14 @@ export function PlansView({
                   {price.toLocaleString("ru")}
                   <span className="text-sm text-muted-foreground font-normal ml-1">{priceSuffix}</span>
                 </div>
-                {billing === "year" && (
+                {isFounderPrice && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+                    <Crown className="w-3 h-3 text-amber-600" />
+                    <span className="text-amber-700 font-medium">Founders</span>
+                    <span className="text-muted-foreground line-through">{stdPrice.toLocaleString("ru")} ₽</span>
+                  </div>
+                )}
+                {!isFounderPrice && billing === "year" && (
                   <div className="mt-1 text-[11px] text-[#059669]">
                     экономия {(p.priceMonth * 12 - p.priceYear).toLocaleString("ru")} ₽
                   </div>
@@ -270,6 +341,43 @@ export function PlansView({
           </div>
         )}
         {err && <p className="text-sm text-destructive">{err}</p>}
+
+        {/* Промокод — пилотный доступ */}
+        <section className="card-surface p-5">
+          <div className="flex items-start gap-3">
+            <div
+              className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-xl"
+              style={{ background: `color-mix(in srgb, ${brand.accentColor} 12%, transparent)`, color: brand.accentColor }}
+            >
+              <Ticket className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold">Есть промокод?</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Введите код, чтобы активировать пилотный или акционный доступ.
+              </p>
+              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                <input
+                  value={promo}
+                  onChange={(e) => setPromo(e.target.value.toUpperCase())}
+                  disabled={!isAdmin || promoBusy}
+                  placeholder="PILOT2026"
+                  className="flex-1 h-10 rounded-lg border border-border bg-background px-3.5 text-sm tracking-wider font-mono uppercase placeholder:text-[hsl(var(--text-tertiary))] focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
+                  maxLength={32}
+                />
+                <Button
+                  disabled={!isAdmin || promoBusy || !promo.trim()}
+                  onClick={activatePromo}
+                  style={{ background: brand.accentColor }}
+                  className="sm:w-auto"
+                >
+                  {promoBusy ? "Активируем…" : "Активировать"}
+                </Button>
+              </div>
+              {promoErr && <p className="mt-2 text-xs text-destructive">{promoErr}</p>}
+            </div>
+          </div>
+        </section>
 
         <p className="text-xs text-muted-foreground">
           Биллинг проводится вручную на этапе пилота: отправьте заявку, мы свяжемся и переведём.

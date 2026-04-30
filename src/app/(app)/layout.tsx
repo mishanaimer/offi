@@ -6,6 +6,7 @@ import { ApiHealthProvider } from "@/components/api-health";
 import { isSuperadmin } from "@/lib/admin";
 import { ensureAdminPlatformCompany } from "@/lib/platform-seed";
 import { BugReportOverlay } from "@/components/bug-report-overlay";
+import { WeeklyPoll } from "@/components/weekly-poll";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
@@ -65,6 +66,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           {children}
         </AppShell>
         <BugReportOverlay />
+        <WeeklyPoll />
       </ApiHealthProvider>
     </BrandingProvider>
   );

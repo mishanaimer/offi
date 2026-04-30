@@ -53,8 +53,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin" className="hover:underline">
               Обзор
             </Link>
+            <Link href="/admin/metrics" className="hover:underline">
+              Метрики
+            </Link>
             <Link href="/admin/companies" className="hover:underline">
               Компании
+            </Link>
+            <Link href="/admin/founders" className="hover:underline">
+              Founders
             </Link>
             <Link href="/admin/plan-requests" className="hover:underline inline-flex items-center gap-1.5">
               Заявки
