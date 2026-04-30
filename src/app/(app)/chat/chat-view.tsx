@@ -131,12 +131,34 @@ export function ChatView({
   }, []);
 
   // Авто-скролл — только если пользователь уже внизу.
-  // useEffect (не useLayoutEffect) + чтение/запись scrollTop — лёгкая операция,
-  // вместе с rAF-батчингом стрима даёт плавный скролл без джиттера.
+  // Дотягиваем scrollTop плавно через rAF (lerp), чтобы typewriter
+  // не дёргал контейнер на каждый символ. Скролл «догоняет» рост текста
+  // с приятной инерцией, как в премиальных мессенджерах.
+  const scrollAnimRef = useRef<number | null>(null);
   useEffect(() => {
     if (!stuckToBottomRef.current) return;
     const el = scrollerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (scrollAnimRef.current !== null) cancelAnimationFrame(scrollAnimRef.current);
+    const step = () => {
+      const target = el.scrollHeight - el.clientHeight;
+      const diff = target - el.scrollTop;
+      if (Math.abs(diff) < 0.5) {
+        el.scrollTop = target;
+        scrollAnimRef.current = null;
+        return;
+      }
+      // lerp: за кадр приближаемся на ~25% к цели — даёт плавную инерцию
+      el.scrollTop += diff * 0.25;
+      scrollAnimRef.current = requestAnimationFrame(step);
+    };
+    scrollAnimRef.current = requestAnimationFrame(step);
+    return () => {
+      if (scrollAnimRef.current !== null) {
+        cancelAnimationFrame(scrollAnimRef.current);
+        scrollAnimRef.current = null;
+      }
+    };
   }, [messages]);
 
   // Авто-рост textarea (до 6 строк)
@@ -420,29 +442,39 @@ export function ChatView({
       let displayedLength = 0;   // сколько символов уже на экране
       let sources: Msg["sources"] | undefined;
 
-      // Typewriter-буфер: сервер может присылать чанки рваными группами
-      // (RouterAI отдаёт по 5–30 токенов разом), а мы рендерим плавно
-      // по 1–4 символа за кадр (~60fps). Если буфер растёт — ускоряемся,
-      // чтобы не отставать. Это даёт «премиальный» эффект побуквенной
-      // печати, как в Claude.ai/Ollama, независимо от рваности upstream.
+      // Typewriter-буфер: сервер шлёт чанки рваными группами (RouterAI
+      // отдаёт по 5–30 токенов разом), а на экран выводим плавно с фикс.
+      // скоростью по времени (а не «символов за кадр» — иначе на 144Hz
+      // мониторе скорость двоится). Адаптация скорости — линейная,
+      // без ступенек, чтобы печать не «прыгала» при росте буфера.
       let typewriterRaf: number | null = null;
       let streamDone = false;
+      let lastTickTs = 0;
+      let charDebt = 0; // дробный остаток символов между кадрами
+      const BASE_CPS = 55;   // базовая скорость, как у Claude.ai
+      const MAX_CPS = 220;   // потолок при большом отставании
 
-      const tick = () => {
+      const tick = (now: number) => {
         typewriterRaf = null;
         const remaining = acc.length - displayedLength;
-        if (remaining <= 0) return;
+        if (remaining <= 0) {
+          lastTickTs = now;
+          return;
+        }
+        if (lastTickTs === 0) lastTickTs = now;
+        const dt = Math.min(now - lastTickTs, 64); // защита от больших скачков (вкладка была неактивной)
+        lastTickTs = now;
 
-        // Адаптивная скорость: чем больше отстали, тем быстрее печатаем.
-        // Базовая — 2 символа/кадр (≈120 cps), потолок — 12 (быстрый сброс).
-        let step = 2;
-        if (remaining > 240) step = 12;
-        else if (remaining > 120) step = 8;
-        else if (remaining > 60) step = 5;
-        else if (remaining > 25) step = 3;
+        // Линейная адаптация: чем больше буфер — тем быстрее, без ступенек.
+        // remaining 0 → BASE_CPS · 80+ → ~MAX_CPS.
+        const targetCps = Math.min(MAX_CPS, BASE_CPS + remaining * 2);
+        // Если стрим закончился — догоняем быстрее.
+        const cps = streamDone ? Math.max(targetCps, remaining / 1.2) : targetCps;
 
-        // Если стрим уже завершён — ускоряемся, чтобы не висеть в хвосте.
-        if (streamDone) step = Math.max(step, Math.ceil(remaining / 6));
+        // Сколько символов «должны» вывести за этот dt (плюс остаток).
+        const charsFloat = (cps * dt) / 1000 + charDebt;
+        const step = Math.max(1, Math.floor(charsFloat));
+        charDebt = charsFloat - step;
 
         displayedLength = Math.min(displayedLength + step, acc.length);
 
@@ -463,7 +495,7 @@ export function ChatView({
         if (typeof requestAnimationFrame === "function") {
           typewriterRaf = requestAnimationFrame(tick);
         } else {
-          typewriterRaf = window.setTimeout(tick, 16) as unknown as number;
+          typewriterRaf = window.setTimeout(() => tick(performance.now()), 16) as unknown as number;
         }
       };
       const flushAllNow = () => {
