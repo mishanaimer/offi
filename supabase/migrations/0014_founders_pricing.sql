@@ -41,7 +41,11 @@ $$;
 grant execute on function public.founders_status() to anon, authenticated;
 
 -- 4. Перекрываем activate_promo_code: специальная ветка для plan='founder'
-create or replace function public.activate_promo_code(
+-- В 0013 функция вернула 4 колонки, а здесь добавляется 5-я (is_founder).
+-- Postgres не разрешает CREATE OR REPLACE с другим return type — DROP сначала.
+drop function if exists public.activate_promo_code(text, uuid);
+
+create function public.activate_promo_code(
   p_code       text,
   p_company_id uuid
 ) returns table (
